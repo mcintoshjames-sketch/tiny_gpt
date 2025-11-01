@@ -13,7 +13,8 @@ def load_checkpoint(checkpoint_path):
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    # Fix for PyTorch 2.6: add weights_only=False for trusted checkpoints
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     
     # Determine tokenizer type
     tokenizer_type = checkpoint.get("tokenizer_type", "char")
@@ -91,14 +92,14 @@ def main():
     )
     parser.add_argument(
         "--prompt",
-        default="The",
-        help="Prompt to start generation (default: 'The')",
+        default="The history of",
+        help="Prompt to start generation (default: 'The history of')",
     )
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=200,
-        help="Maximum number of tokens to generate (default: 200)",
+        default=300,
+        help="Maximum number of tokens to generate (default: 300)",
     )
     parser.add_argument(
         "--temperature",
@@ -109,8 +110,8 @@ def main():
     parser.add_argument(
         "--num-samples",
         type=int,
-        default=3,
-        help="Number of samples to generate (default: 3)",
+        default=1,
+        help="Number of samples to generate (default: 1)",
     )
     
     args = parser.parse_args()
@@ -130,19 +131,26 @@ def main():
     model, tok, config = load_checkpoint(args.checkpoint)
     model = model.to(device)
     
-    print(f"\nModel config: {config}")
-    print(f"Vocab size: {config['vocab_size']}")
+    print(f"\nModel info:")
+    print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"  Vocab size: {config['vocab_size']}")
+    print(f"  Layers: {config['n_layer']}")
+    print(f"  Heads: {config['n_head']}")
+    print(f"  d_model: {config['d_model']}")
     
     # Generate samples
-    print(f"\n{'='*60}")
-    print(f"Generating {args.num_samples} samples")
+    print(f"\n{'='*80}")
+    print(f"Generating {args.num_samples} sample(s)")
     print(f"Prompt: '{args.prompt}'")
     print(f"Temperature: {args.temperature}")
-    print(f"{'='*60}\n")
+    print(f"Max tokens: {args.max_tokens}")
+    print(f"{'='*80}\n")
     
     for i in range(args.num_samples):
-        print(f"Sample {i+1}:")
-        print("-" * 60)
+        if args.num_samples > 1:
+            print(f"Sample {i+1}:")
+            print("-" * 80)
+        
         generated = generate(
             model,
             tok,
@@ -152,8 +160,10 @@ def main():
             device=device,
         )
         print(generated)
-        print("-" * 60)
-        print()
+        
+        if args.num_samples > 1:
+            print("-" * 80)
+            print()
 
 
 if __name__ == "__main__":
