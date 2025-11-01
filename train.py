@@ -280,16 +280,16 @@ def main():
     train_data = np.array(tok.encode(train_text), dtype=np.int32)
     val_data = np.array(tok.encode(valid_text), dtype=np.int32)
 
-    # Hyperparameters for WT-103 (large dataset needs more training)
-    batch_size = 128  # Larger batches for efficiency on M4
-    block_size = 256  # Longer context window
-    n_layer = 6  # Deeper model for complex patterns
-    n_head = 8  # More attention heads
-    d_model = 512  # Much larger embedding dimension
-    d_ff = 2048  # Larger feedforward
-    epochs = 20  # Many more epochs for large dataset
-    iters_per_epoch = 500  # Many more iterations
-    lr = 6e-4  # Slightly higher learning rate
+    # Hyperparameters for WT-103 (balanced for M4 speed and quality)
+    batch_size = 64  # Reasonable batch size for M4
+    block_size = 128  # Good context window
+    n_layer = 4  # Good depth without being too slow
+    n_head = 8  # Multiple attention heads
+    d_model = 256  # Reasonable embedding dimension
+    d_ff = 1024  # Feedforward dimension
+    epochs = 15  # Good amount of training
+    iters_per_epoch = 300  # Reasonable iterations
+    lr = 5e-4  # Good learning rate
     warmup_iters = 100  # Longer warmup
 
     model = TinyGPT(tok.vocab_size, block_size, n_layer, n_head, d_model, d_ff, dropout=0.1).to(DEVICE)
@@ -299,7 +299,7 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     
     # Gradient accumulation for larger effective batch size
-    grad_accum_steps = 4  # Effective batch size = 128 * 4 = 512
+    grad_accum_steps = 2  # Effective batch size = 64 * 2 = 128 (more reasonable)
 
     # Training loop
     model.train()
