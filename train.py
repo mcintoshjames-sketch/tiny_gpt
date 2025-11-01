@@ -380,8 +380,8 @@ def main():
     block_size = 128  # Good context window for BPE (each token is subword, not char)
     n_layer = 5  # Increased depth for better learning
     n_head = 6  # More attention heads for better pattern recognition
-    d_model = 350  # Larger embedding dimension (note: must be divisible by n_head)
-    d_ff = 1300  # Larger feedforward dimension
+    d_model = 360  # Larger embedding dimension (60 per head, clean multiple of n_head)
+    d_ff = 1440  # Larger feedforward dimension (4x d_model, standard ratio)
     epochs = 80  # ~6 hours of training
     iters_per_epoch = 400  # More gradient steps per epoch for better convergence
     lr = 5e-4  # Peak learning rate
