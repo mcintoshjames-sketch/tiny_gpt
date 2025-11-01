@@ -15,6 +15,15 @@ try:
 except ImportError:
     HF_DATASETS_AVAILABLE = False
 
+try:
+    from tokenizers import Tokenizer
+    from tokenizers.models import BPE
+    from tokenizers.trainers import BpeTrainer
+    from tokenizers.pre_tokenizers import Whitespace
+    TOKENIZERS_AVAILABLE = True
+except ImportError:
+    TOKENIZERS_AVAILABLE = False
+
 # WT-103 dataset from Hugging Face (Salesforce/wikitext-103-raw-v1)
 WT103_TRAIN_URL = "https://huggingface.co/datasets/Salesforce/wikitext/resolve/refs/heads/main/wikitext-103-raw-v1/train-00000-of-00001.parquet"
 WT103_VALID_URL = "https://huggingface.co/datasets/Salesforce/wikitext/resolve/refs/heads/main/wikitext-103-raw-v1/validation-00000-of-00001.parquet"
@@ -128,7 +137,7 @@ def download_data():
 
 
 class CharTokenizer:
-    """Character-level tokenizer for easy inspection."""
+    """Character-level tokenizer (fallback if tokenizers library not available)."""
     def __init__(self, text):
         self.chars = sorted(list(set(text)))
         self.stoi = {ch: i for i, ch in enumerate(self.chars)}
@@ -140,6 +149,64 @@ class CharTokenizer:
     
     def decode(self, ids):
         return "".join(self.itos[i] for i in ids)
+
+
+class BPETokenizer:
+    """Byte-Pair Encoding (BPE) tokenizer using HuggingFace tokenizers library."""
+    def __init__(self, vocab_size=4096):
+        if not TOKENIZERS_AVAILABLE:
+            raise ImportError("tokenizers library not available. Install with: pip install tokenizers")
+        
+        self.vocab_size = vocab_size
+        self.tokenizer = Tokenizer(BPE(unk_token="<unk>"))
+        self.tokenizer.pre_tokenizer = Whitespace()
+        self._trained = False
+    
+    def train(self, texts):
+        """Train BPE tokenizer on text data."""
+        # Save texts to temporary file for training
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
+            if isinstance(texts, list):
+                for text in texts:
+                    f.write(text + '\n')
+            else:
+                f.write(texts)
+            temp_path = f.name
+        
+        try:
+            trainer = BpeTrainer(
+                vocab_size=self.vocab_size,
+                special_tokens=["<unk>", "<pad>", "<bos>", "<eos>"],
+                show_progress=True
+            )
+            self.tokenizer.train([temp_path], trainer)
+            self._trained = True
+            print(f"✓ BPE tokenizer trained with vocab_size={self.vocab_size}")
+        finally:
+            os.unlink(temp_path)
+    
+    def encode(self, text):
+        """Encode text to token IDs."""
+        if not self._trained:
+            raise ValueError("Tokenizer not trained yet. Call train() first.")
+        encoding = self.tokenizer.encode(text)
+        return encoding.ids
+    
+    def decode(self, ids):
+        """Decode token IDs to text."""
+        if not self._trained:
+            raise ValueError("Tokenizer not trained yet. Call train() first.")
+        return self.tokenizer.decode(ids)
+    
+    def save(self, path):
+        """Save tokenizer to disk."""
+        self.tokenizer.save(path)
+    
+    def load(self, path):
+        """Load tokenizer from disk."""
+        self.tokenizer = Tokenizer.from_file(path)
+        self._trained = True
 
 class TinyGPT(nn.Module):
     def __init__(self, vocab_size, block_size, n_layer=4, n_head=4, d_model=256, d_ff=1024, dropout=0.1):
@@ -269,29 +336,63 @@ def main():
     valid_text = open(VALID_PATH, "r", encoding="utf-8").read()
     print(f"Validation text length: {len(valid_text):,} characters")
     
-    # Build tokenizer from BOTH train and validation data
-    # This ensures all characters are in the vocabulary
-    print("Building tokenizer from combined vocabulary...")
-    combined_text = train_text + valid_text
-    tok = CharTokenizer(combined_text)
-    print(f"Vocabulary size: {tok.vocab_size}")
+    # Build tokenizer - Use BPE for better efficiency
+    print("\nBuilding tokenizer...")
+    use_bpe = TOKENIZERS_AVAILABLE
     
-    # Now encode both with complete vocabulary
+    if use_bpe:
+        print("Using BPE (Byte-Pair Encoding) tokenizer for efficient subword tokenization")
+        vocab_size = 4096  # Good balance: smaller than char-level, captures subwords
+        tok = BPETokenizer(vocab_size=vocab_size)
+        
+        # Check if tokenizer already exists
+        tokenizer_path = "tokenizer_bpe.json"
+        if os.path.exists(tokenizer_path):
+            print(f"Loading existing tokenizer from {tokenizer_path}")
+            tok.load(tokenizer_path)
+        else:
+            print("Training BPE tokenizer on combined train+validation data...")
+            combined_text = train_text + valid_text
+            tok.train(combined_text)
+            tok.save(tokenizer_path)
+            print(f"Tokenizer saved to {tokenizer_path}")
+        
+        print(f"Vocabulary size: {tok.vocab_size}")
+    else:
+        print("⚠️  tokenizers library not available, falling back to character-level")
+        print("   Install with: pip install tokenizers")
+        print("   Character-level tokenization is slower and less efficient")
+        combined_text = train_text + valid_text
+        tok = CharTokenizer(combined_text)
+        print(f"Vocabulary size: {tok.vocab_size}")
+    
+    # Encode both datasets
+    print("Encoding training data...")
     train_data = np.array(tok.encode(train_text), dtype=np.int32)
+    print(f"Training tokens: {len(train_data):,}")
+    
+    print("Encoding validation data...")
     val_data = np.array(tok.encode(valid_text), dtype=np.int32)
+    print(f"Validation tokens: {len(val_data):,}")
 
-    # Hyperparameters for WT-103 (optimized for 6-hour overnight training on M4)
+    # Hyperparameters (optimized for 6-hour overnight training on M4 with BPE)
     batch_size = 64  # Reasonable batch size for M4
-    block_size = 128  # Good context window
-    n_layer = 4  # Good depth without being too slow
-    n_head = 8  # Multiple attention heads
-    d_model = 256  # Reasonable embedding dimension
-    d_ff = 1024  # Feedforward dimension
-    epochs = 80  # ~6 hours of training (45min/15epochs * 80/15 ≈ 240min = 4hrs, but slower iterations add time)
+    block_size = 128  # Good context window for BPE (each token is subword, not char)
+    n_layer = 5  # Increased depth for better learning
+    n_head = 6  # More attention heads for better pattern recognition
+    d_model = 350  # Larger embedding dimension (note: must be divisible by n_head)
+    d_ff = 1300  # Larger feedforward dimension
+    epochs = 80  # ~6 hours of training
     iters_per_epoch = 400  # More gradient steps per epoch for better convergence
     lr = 5e-4  # Peak learning rate
     warmup_iters = 200  # Longer warmup for stability
     min_lr = 5e-5  # Minimum learning rate for cosine decay (10% of peak)
+    
+    # Ensure d_model is divisible by n_head
+    if d_model % n_head != 0:
+        # Adjust d_model to nearest multiple of n_head
+        d_model = ((d_model // n_head) + 1) * n_head
+        print(f"⚠️  Adjusted d_model to {d_model} (must be divisible by n_head={n_head})")
 
     model = TinyGPT(tok.vocab_size, block_size, n_layer, n_head, d_model, d_ff, dropout=0.15).to(DEVICE)
     print(f"\nModel parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -360,8 +461,7 @@ def main():
             best_val_loss = losses['val']
             checkpoint = {
                 "model_state": model.state_dict(),
-                "tok_itos": tok.itos,
-                "tok_stoi": tok.stoi,
+                "tokenizer_type": "bpe" if use_bpe else "char",
                 "config": {
                     "vocab_size": tok.vocab_size,
                     "block_size": block_size,
@@ -374,8 +474,20 @@ def main():
                 "val_loss": losses['val'],
                 "epoch": epoch + 1
             }
+            
+            # For character tokenizer, save vocab mappings
+            if not use_bpe:
+                checkpoint["tok_itos"] = tok.itos
+                checkpoint["tok_stoi"] = tok.stoi
+            
             torch.save(checkpoint, "tiny_gpt_best.pt")
             print(f"✓ Saved best model (val_loss={best_val_loss:.4f}) to tiny_gpt_best.pt")
+            
+            # Also copy the tokenizer file if using BPE
+            if use_bpe and os.path.exists("tokenizer_bpe.json"):
+                import shutil
+                shutil.copy("tokenizer_bpe.json", "tokenizer_bpe_best.json")
+                print(f"✓ Saved tokenizer to tokenizer_bpe_best.json")
 
     # Generate sample
     print("\n=== Generating sample ===")
@@ -390,8 +502,7 @@ def main():
     print(f"\nTraining complete! Best validation loss: {best_val_loss:.4f}")
     checkpoint = {
         "model_state": model.state_dict(),
-        "tok_itos": tok.itos,
-        "tok_stoi": tok.stoi,
+        "tokenizer_type": "bpe" if use_bpe else "char",
         "config": {
             "vocab_size": tok.vocab_size,
             "block_size": block_size,
@@ -401,9 +512,19 @@ def main():
             "d_ff": d_ff,
         }
     }
+    
+    # For character tokenizer, save vocab mappings
+    if not use_bpe:
+        checkpoint["tok_itos"] = tok.itos
+        checkpoint["tok_stoi"] = tok.stoi
+    
     torch.save(checkpoint, "tiny_gpt_final.pt")
     print("Final checkpoint saved to tiny_gpt_final.pt")
     print("Best model saved to tiny_gpt_best.pt")
+    
+    if use_bpe:
+        print("BPE tokenizer saved to tokenizer_bpe.json (best: tokenizer_bpe_best.json)")
+    
     print("\n🎉 Training finished! Use tiny_gpt_best.pt for inference.")
 
 if __name__ == "__main__":

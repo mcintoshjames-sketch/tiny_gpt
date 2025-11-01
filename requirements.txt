@@ -5,3 +5,4 @@ requests
 datasets
 pyarrow
 pandas
+tokenizers>=0.13.0

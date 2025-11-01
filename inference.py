@@ -5,7 +5,7 @@ Generate text using a pre-trained checkpoint
 import os
 import torch
 import argparse
-from train import TinyGPT, CharTokenizer
+from train import TinyGPT, CharTokenizer, BPETokenizer, TOKENIZERS_AVAILABLE
 
 
 def load_checkpoint(checkpoint_path):
@@ -15,11 +15,32 @@ def load_checkpoint(checkpoint_path):
     
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     
+    # Determine tokenizer type
+    tokenizer_type = checkpoint.get("tokenizer_type", "char")
+    
     # Recreate tokenizer
-    tok = CharTokenizer.__new__(CharTokenizer)
-    tok.itos = checkpoint["tok_itos"]
-    tok.stoi = checkpoint["tok_stoi"]
-    tok.vocab_size = len(tok.chars)
+    if tokenizer_type == "bpe":
+        if not TOKENIZERS_AVAILABLE:
+            raise ImportError("tokenizers library required for BPE. Install with: pip install tokenizers")
+        
+        # Load BPE tokenizer from file
+        tokenizer_file = "tokenizer_bpe_best.json"
+        if not os.path.exists(tokenizer_file):
+            tokenizer_file = "tokenizer_bpe.json"
+        if not os.path.exists(tokenizer_file):
+            raise FileNotFoundError(f"BPE tokenizer file not found: {tokenizer_file}")
+        
+        tok = BPETokenizer(vocab_size=checkpoint["config"]["vocab_size"])
+        tok.load(tokenizer_file)
+        print(f"Loaded BPE tokenizer from {tokenizer_file}")
+    else:
+        # Character-level tokenizer
+        tok = CharTokenizer.__new__(CharTokenizer)
+        tok.itos = checkpoint["tok_itos"]
+        tok.stoi = checkpoint["tok_stoi"]
+        tok.vocab_size = len(tok.itos)
+        tok.chars = list(tok.itos.values())
+        print("Loaded character-level tokenizer")
     
     # Recreate model
     config = checkpoint["config"]
