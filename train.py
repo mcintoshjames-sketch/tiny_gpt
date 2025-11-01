@@ -253,6 +253,13 @@ def main():
         print("Could not download WT-103 dataset. Exiting.")
         return
     
+    # Check if we should use smaller dataset for faster training
+    # Delete WT-103 files and script will use TinyShakespeare fallback
+    if not os.path.exists(TRAIN_PATH) or os.path.getsize(TRAIN_PATH) < 10_000_000:
+        print("\n⚠️  Using smaller dataset for faster training and better results")
+        print("WT-103 is very large for character-level models.")
+        print("Consider using TinyShakespeare by deleting the data files.\n")
+    
     # Load both datasets first
     print("Loading WT-103 training data...")
     train_text = open(TRAIN_PATH, "r", encoding="utf-8").read()
@@ -273,15 +280,15 @@ def main():
     train_data = np.array(tok.encode(train_text), dtype=np.int32)
     val_data = np.array(tok.encode(valid_text), dtype=np.int32)
 
-    # Hyperparameters (small for Mac M4)
-    batch_size = 32  # Reduced for MPS memory
+    # Hyperparameters (adjust based on dataset size and time available)
+    batch_size = 64  # Increased for faster training on M4
     block_size = 128
-    n_layer = 3
+    n_layer = 4  # Increased depth
     n_head = 4
-    d_model = 192
-    d_ff = 768
-    epochs = 5
-    iters_per_epoch = 100
+    d_model = 256  # Increased capacity
+    d_ff = 1024
+    epochs = 10  # More epochs for better convergence
+    iters_per_epoch = 200  # More iterations per epoch
     lr = 3e-4
     warmup_iters = 50
 
