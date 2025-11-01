@@ -252,21 +252,25 @@ def main():
         print("Could not download WT-103 dataset. Exiting.")
         return
     
-    # Load and tokenize
+    # Load both datasets first
     print("Loading WT-103 training data...")
     train_text = open(TRAIN_PATH, "r", encoding="utf-8").read()
     print(f"Training text length: {len(train_text):,} characters")
     
-    print("Building tokenizer...")
-    tok = CharTokenizer(train_text)
-    print(f"Vocabulary size: {tok.vocab_size}")
-    
-    train_data = np.array(tok.encode(train_text), dtype=np.int32)
-    
     print("Loading WT-103 validation data...")
     valid_text = open(VALID_PATH, "r", encoding="utf-8").read()
-    val_data = np.array(tok.encode(valid_text), dtype=np.int32)
     print(f"Validation text length: {len(valid_text):,} characters")
+    
+    # Build tokenizer from BOTH train and validation data
+    # This ensures all characters are in the vocabulary
+    print("Building tokenizer from combined vocabulary...")
+    combined_text = train_text + valid_text
+    tok = CharTokenizer(combined_text)
+    print(f"Vocabulary size: {tok.vocab_size}")
+    
+    # Now encode both with complete vocabulary
+    train_data = np.array(tok.encode(train_text), dtype=np.int32)
+    val_data = np.array(tok.encode(valid_text), dtype=np.int32)
 
     # Hyperparameters (small for Mac M4)
     batch_size = 32  # Reduced for MPS memory
