@@ -280,23 +280,26 @@ def main():
     train_data = np.array(tok.encode(train_text), dtype=np.int32)
     val_data = np.array(tok.encode(valid_text), dtype=np.int32)
 
-    # Hyperparameters (adjust based on dataset size and time available)
-    batch_size = 64  # Increased for faster training on M4
-    block_size = 128
-    n_layer = 4  # Increased depth
-    n_head = 4
-    d_model = 256  # Increased capacity
-    d_ff = 1024
-    epochs = 10  # More epochs for better convergence
-    iters_per_epoch = 200  # More iterations per epoch
-    lr = 3e-4
-    warmup_iters = 50
+    # Hyperparameters for WT-103 (large dataset needs more training)
+    batch_size = 128  # Larger batches for efficiency on M4
+    block_size = 256  # Longer context window
+    n_layer = 6  # Deeper model for complex patterns
+    n_head = 8  # More attention heads
+    d_model = 512  # Much larger embedding dimension
+    d_ff = 2048  # Larger feedforward
+    epochs = 20  # Many more epochs for large dataset
+    iters_per_epoch = 500  # Many more iterations
+    lr = 6e-4  # Slightly higher learning rate
+    warmup_iters = 100  # Longer warmup
 
     model = TinyGPT(tok.vocab_size, block_size, n_layer, n_head, d_model, d_ff, dropout=0.1).to(DEVICE)
     print(f"\nModel parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Training on: {DEVICE}\n")
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    
+    # Gradient accumulation for larger effective batch size
+    grad_accum_steps = 4  # Effective batch size = 128 * 4 = 512
 
     # Training loop
     model.train()
@@ -311,17 +314,27 @@ def main():
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr * lr_scale
             
-            xb, yb = get_batch(train_data, batch_size, block_size, DEVICE)
-            logits, loss = model(xb, yb)
+            # Gradient accumulation
             optimizer.zero_grad()
-            loss.backward()
+            accum_loss = 0.0
+            for micro_step in range(grad_accum_steps):
+                xb, yb = get_batch(train_data, batch_size, block_size, DEVICE)
+                logits, loss = model(xb, yb)
+                loss = loss / grad_accum_steps  # Scale loss
+                loss.backward()
+                accum_loss += loss.item()
+            
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             global_step += 1
             
-            if it % 20 == 0:
-                losses = estimate_loss(model, train_data, val_data, batch_size, block_size, DEVICE, eval_iters=5)
-                pbar.set_postfix(train_loss=f"{losses['train']:.4f}", val_loss=f"{losses['val']:.4f}")
+            if it % 50 == 0:
+                losses = estimate_loss(model, train_data, val_data, batch_size, block_size, DEVICE, eval_iters=10)
+                pbar.set_postfix(
+                    train_loss=f"{losses['train']:.4f}", 
+                    val_loss=f"{losses['val']:.4f}",
+                    batch_loss=f"{accum_loss:.4f}"
+                )
 
     # Generate sample
     print("\n=== Generating sample ===")
