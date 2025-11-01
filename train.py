@@ -366,13 +366,25 @@ def main():
         tok = CharTokenizer(combined_text)
         print(f"Vocabulary size: {tok.vocab_size}")
     
-    # Encode both datasets
+    # Encode both datasets in chunks to avoid memory issues
     print("Encoding training data...")
-    train_data = np.array(tok.encode(train_text), dtype=np.int32)
+    chunk_size = 10_000_000  # Process 10MB of text at a time
+    train_tokens = []
+    
+    for i in range(0, len(train_text), chunk_size):
+        chunk = train_text[i:i+chunk_size]
+        train_tokens.extend(tok.encode(chunk))
+        if (i // chunk_size + 1) % 10 == 0:
+            print(f"  Processed {i+len(chunk):,} / {len(train_text):,} characters...")
+    
+    train_data = np.array(train_tokens, dtype=np.int32)
+    del train_tokens  # Free memory
     print(f"Training tokens: {len(train_data):,}")
     
     print("Encoding validation data...")
-    val_data = np.array(tok.encode(valid_text), dtype=np.int32)
+    val_tokens = tok.encode(valid_text)
+    val_data = np.array(val_tokens, dtype=np.int32)
+    del val_tokens  # Free memory
     print(f"Validation tokens: {len(val_data):,}")
 
     # Hyperparameters (optimized for 6-hour overnight training on M4 with BPE)
