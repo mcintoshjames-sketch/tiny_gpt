@@ -13,7 +13,7 @@ git clone <repo-url>
 cd tiny_gpt
 
 # Create and activate virtual environment
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 
 # Install dependencies
@@ -34,7 +34,7 @@ python train.py
 
 1. **Create virtual environment:**
    ```bash
-   python -m venv .venv
+   python3 -m venv .venv
    source .venv/bin/activate
    ```
 
