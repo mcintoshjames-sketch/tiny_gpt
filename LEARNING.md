@@ -1,21 +1,867 @@
-# Building a Tiny GPT from Scratch - Learning Guide
+# Tiny GPT: A Beginner's Guide
 
-This document explains how we built a minimal transformer-based language model, the attention mechanism used, implementation details, and how we optimized it for Apple Silicon (M4 Mac).
+This guide explains how Large Language Models (LLMs) work from the ground up, assuming no prior knowledge. We'll build up the concepts step by step.
 
 ---
 
 ## Table of Contents
 
-1. [Architecture Overview](#architecture-overview)
-2. [The Attention Mechanism](#the-attention-mechanism)
-3. [Implementation Details](#implementation-details)
-4. [Performance Tuning for M4 Mac](#performance-tuning-for-m4-mac)
-5. [Training Process](#training-process)
-6. [Key Learnings](#key-learnings)
+1. [What is a Language Model?](#what-is-a-language-model)
+2. [Understanding Tokenization](#understanding-tokenization)
+3. [What are Embeddings?](#what-are-embeddings)
+4. [How Neural Networks Learn](#how-neural-networks-learn)
+5. [The Transformer Architecture (Simple)](#the-transformer-architecture-simple)
+6. [Attention Explained Simply](#attention-explained-simply)
+7. [Training Your Model](#training-your-model)
+8. [Understanding the Code](#understanding-the-code)
+9. [Performance Tuning for M4 Mac](#performance-tuning-for-m4-mac)
+10. [Common Questions](#common-questions)
 
 ---
 
-## Architecture Overview
+
+---
+
+## What is a Language Model?
+
+**Simple definition**: A language model predicts the next word (or character) given previous words.
+
+### Example:
+- Input: "The cat sat on the"
+- Model predicts: "mat" (most likely next word)
+
+Think of it like autocomplete on your phone, but much more sophisticated.
+
+### How it works:
+1. You give it some text (prompt)
+2. It looks at patterns it learned from training data
+3. It predicts what comes next
+4. Repeat to generate longer text
+
+---
+
+## Understanding Tokenization
+
+**What is tokenization?** Breaking text into small pieces (tokens) that the computer can work with.
+
+### Why do we need it?
+
+Computers don't understand text directly. They only understand numbers. Tokenization converts text → numbers.
+
+### Example with Character-Level Tokenization (what we use):
+
+```
+Text:     "hello"
+Tokens:   ['h', 'e', 'l', 'l', 'o']
+Token IDs: [104, 101, 108, 108, 111]
+```
+
+Each unique character gets a unique number (ID).
+
+### Our Tokenizer in Action:
+
+```python
+# Build vocabulary from all unique characters in text
+chars = ['a', 'b', 'c', ..., 'z', ' ', '.', '!']  # 65 characters for Shakespeare
+
+# Create mapping: character → ID
+stoi = {'a': 0, 'b': 1, 'c': 2, ..., 'z': 25, ' ': 26}
+
+# Encode text to numbers
+"hello" → [7, 4, 11, 11, 14]
+
+# Decode numbers back to text
+[7, 4, 11, 11, 14] → "hello"
+```
+
+### Why Character-Level?
+
+**Alternative approaches:**
+- **Word-level**: Each word is a token ("hello" = one token)
+  - Problem: Vocabulary too large (millions of words)
+- **Subword-level** (BPE): Common chunks ("hel" + "lo")
+  - Better, but complex to implement
+- **Character-level**: Each letter is a token
+  - ✅ Small vocabulary (26 letters + punctuation)
+  - ✅ Easy to understand
+  - ❌ Longer sequences (more computation)
+
+We use character-level because it's simple and educational.
+
+---
+
+## What are Embeddings?
+
+**Simple definition**: Embeddings convert token IDs into dense vectors of numbers that capture meaning.
+
+### The Problem:
+
+Token IDs are just labels (7, 4, 11...). They don't tell the model anything about relationships:
+- Is 'h' similar to 'e'?
+- Are vowels related?
+
+### The Solution: Embeddings
+
+An embedding is a **list of numbers** (a vector) that represents a token. Similar tokens get similar vectors.
+
+### Visual Example:
+
+```
+Character → Token ID → Embedding (vector of numbers)
+
+'a' → 0 → [0.2, -0.5, 0.8, 0.1, ...]  (256 numbers)
+'b' → 1 → [0.3, -0.4, 0.7, 0.2, ...]
+'e' → 4 → [0.5, -0.1, 0.9, 0.3, ...]  (similar to 'a' - both vowels)
+```
+
+### Why Vectors?
+
+Vectors let us do math! Similar meanings = similar vectors:
+- Distance between vectors shows similarity
+- The model learns these vectors during training
+
+### In Our Code:
+
+```python
+# Embedding layer: vocabulary size → embedding dimension
+self.tok_emb = nn.Embedding(vocab_size=65, d_model=256)
+
+# When we feed in token ID 7 ('h'):
+# Output: A vector of 256 floating point numbers
+embedding = self.tok_emb(token_id=7)  # → [0.2, -0.3, 0.8, ..., 0.1]
+```
+
+### Two Types of Embeddings We Use:
+
+1. **Token Embeddings**: What character is this?
+   - 'a' → [0.2, -0.5, 0.8, ...]
+
+2. **Position Embeddings**: Where is it in the sequence?
+   - Position 0 → [0.1, 0.3, -0.2, ...]
+   - Position 1 → [0.2, 0.4, -0.1, ...]
+
+We **add them together**:
+```
+Final embedding = token_embedding + position_embedding
+```
+
+This tells the model both **what** the character is and **where** it appears.
+
+---
+
+## How Neural Networks Learn
+
+Think of a neural network as a **function with millions of knobs** (parameters).
+
+### The Learning Process:
+
+1. **Start with random knobs** (random parameters)
+2. **Make a prediction** (generate text)
+3. **Check how wrong you are** (compute loss)
+4. **Adjust knobs slightly** to be less wrong (backpropagation)
+5. **Repeat millions of times**
+
+### Example:
+
+```
+Correct answer: "The cat sat on the mat"
+Model prediction: "The xyz qwr fg the pqr" (terrible at first!)
+
+Loss (error): 4.2 (high = bad)
+
+After 1000 iterations:
+Model prediction: "The cat sat on the log"
+Loss: 2.1 (lower = better)
+
+After 10000 iterations:
+Model prediction: "The cat sat on the mat"
+Loss: 0.3 (very low = good!)
+```
+
+### What are Parameters?
+
+Every number in the model that gets adjusted during training:
+- Embedding weights
+- Attention weights
+- Layer weights
+
+Our tiny model has **~5 million parameters** (5 million knobs to tune).
+
+### Loss Function:
+
+Measures "how wrong" the model is:
+- **High loss** (e.g., 4.0): Model is guessing randomly
+- **Low loss** (e.g., 0.5): Model is making good predictions
+
+We use **cross-entropy loss**: compares predicted probabilities vs actual next character.
+
+---
+
+## The Transformer Architecture (Simple)
+
+Our model is a simplified GPT (Generative Pre-trained Transformer). Here's the flow:
+
+```
+Input Text: "hello"
+      ↓
+[1. Tokenize]
+      ↓
+Token IDs: [7, 4, 11, 11, 14]
+      ↓
+[2. Embed]
+      ↓
+Embeddings: Each token → 256-number vector
+      ↓
+[3. Transformer Blocks] (repeated 4 times)
+   ↓
+   Attention Layer (look at other tokens)
+   ↓
+   Feed-Forward Layer (process information)
+   ↓
+[4. Output Layer]
+      ↓
+Predictions: Probability for each possible next character
+      ↓
+[5. Sample]
+      ↓
+Next character: "!"
+```
+
+### Key Components:
+
+1. **Embeddings**: Text → Vectors
+2. **Attention**: Let tokens "talk to each other"
+3. **Feed-Forward**: Process information
+4. **Output**: Vectors → Predictions
+
+---
+
+## Attention Explained Simply
+
+**The core innovation of transformers!**
+
+### The Problem:
+
+When predicting the next word, you need to look at **all previous words**, not just the most recent one.
+
+Example:
+```
+"The cat, which was very fluffy and orange, sat on the mat"
+```
+
+To predict "mat", you need to remember:
+- "sat" (most recent)
+- "cat" (the subject, far away)
+- "on the" (preposition context)
+
+### What is Attention?
+
+**Attention lets each word "look at" and gather information from other words.**
+
+### Simple Analogy:
+
+Imagine you're in a classroom:
+- **Query**: "I need help with math"
+- **Keys**: Each student says what they're good at
+  - Student A: "I'm good at math"
+  - Student B: "I'm good at history"
+  - Student C: "I'm good at math"
+- **Attention scores**: You pay attention to students who match your need
+  - Student A: 90% attention
+  - Student B: 5% attention
+  - Student C: 90% attention
+- **Values**: You get information from the students you're attending to
+
+### In Our Model:
+
+Every token creates three things:
+1. **Query (Q)**: "What am I looking for?"
+2. **Key (K)**: "What information do I have?"
+3. **Value (V)**: "Here's my information"
+
+```python
+# For the word "sat" trying to predict next word:
+
+Q_sat = "I'm a verb, looking for related context"
+K_cat = "I'm a noun, the subject"
+K_fluffy = "I'm an adjective"
+K_on = "I'm a preposition indicating location"
+
+# Attention scores (how much to pay attention):
+score(sat, cat) = 0.8  # High! Subject is important
+score(sat, fluffy) = 0.1  # Low, less relevant
+score(sat, on) = 0.9  # Very high! Location preposition
+
+# Gather information (weighted by scores):
+output_sat = 0.8 × V_cat + 0.1 × V_fluffy + 0.9 × V_on + ...
+```
+
+### Multi-Head Attention:
+
+Instead of one attention mechanism, we use **multiple "heads"** that look for different patterns:
+- Head 1: Grammar relationships
+- Head 2: Semantic meaning
+- Head 3: Long-range dependencies
+- Head 4: Local context
+
+Each head learns different things!
+
+### Causal Masking (Very Important!):
+
+**Rule**: You can only look at **previous** tokens, not future ones.
+
+```
+Predicting character 3:
+Can see: [char0, char1, char2] ✅
+Cannot see: [char4, char5, ...] ❌
+```
+
+This is why it's called "causal" - cause comes before effect.
+
+We use a **mask** to block future tokens:
+```
+Attention matrix:
+     c0  c1  c2  c3  c4
+c0 [ ✓   ✗   ✗   ✗   ✗ ]
+c1 [ ✓   ✓   ✗   ✗   ✗ ]
+c2 [ ✓   ✓   ✓   ✗   ✗ ]
+c3 [ ✓   ✓   ✓   ✓   ✗ ]
+c4 [ ✓   ✓   ✓   ✓   ✓ ]
+
+✓ = can attend to
+✗ = blocked (masked)
+```
+
+---
+
+## Training Your Model
+
+### What Happens During Training:
+
+```python
+for epoch in range(20):  # Go through dataset 20 times
+    for batch in dataset:
+        # 1. Get a chunk of text
+        input_text = "hello worl"
+        target_text = "ello world"  # Shifted by 1 character
+        
+        # 2. Convert to token IDs
+        input_ids = [7, 4, 11, 11, 14, 26, 22, 14, 17, 11]
+        target_ids = [4, 11, 11, 14, 26, 22, 14, 17, 11, 3]
+        
+        # 3. Model makes prediction
+        predictions = model(input_ids)
+        
+        # 4. Compute loss (how wrong?)
+        loss = cross_entropy(predictions, target_ids)
+        
+        # 5. Adjust model parameters to reduce loss
+        loss.backward()  # Compute gradients
+        optimizer.step()  # Update parameters
+```
+
+### Key Training Concepts:
+
+**Batch Size**: How many examples to process at once
+- Larger = faster training (parallel processing)
+- Larger = more memory
+- We use 64 on M4 Mac
+
+**Learning Rate**: How big the parameter adjustments are
+- Too high: Model doesn't learn (jumps around)
+- Too low: Training takes forever
+- We use 5e-4 (0.0005)
+
+**Epochs**: How many times to go through the entire dataset
+- More epochs = better learning (up to a point)
+- Too many = overfitting (memorizing, not generalizing)
+
+**Gradient Accumulation**: Trick to simulate larger batches
+- Process 2 small batches
+- Accumulate gradients
+- Update parameters once
+- Effective batch size = 64 × 2 = 128
+
+---
+
+## Understanding the Code
+
+Let's walk through the main pieces:
+
+### 1. Tokenizer (Simple Version)
+
+```python
+class CharTokenizer:
+    def __init__(self, text):
+        # Find all unique characters
+        self.chars = sorted(list(set(text)))  # ['a', 'b', 'c', ...]
+        
+        # Create mappings
+        self.stoi = {ch: i for i, ch in enumerate(self.chars)}  # char → ID
+        self.itos = {i: ch for ch, i in self.stoi.items()}      # ID → char
+    
+    def encode(self, text):
+        # "hello" → [7, 4, 11, 11, 14]
+        return [self.stoi[c] for c in text]
+    
+    def decode(self, ids):
+        # [7, 4, 11, 11, 14] → "hello"
+        return "".join(self.itos[i] for i in ids)
+```
+
+### 2. Attention Layer (Simplified Explanation)
+
+```python
+class CausalSelfAttention:
+    def __init__(self, d_model, n_head):
+        # Create Q, K, V projections
+        self.query = Linear(d_model, d_model)
+        self.key = Linear(d_model, d_model)
+        self.value = Linear(d_model, d_model)
+    
+    def forward(self, x):
+        # x shape: (batch, sequence_length, d_model)
+        
+        # 1. Create queries, keys, values
+        Q = self.query(x)  # "What am I looking for?"
+        K = self.key(x)    # "What info do I have?"
+        V = self.value(x)  # "Here's my info"
+        
+        # 2. Compute attention scores
+        # How much should each token attend to each other token?
+        scores = Q @ K.transpose()  # Matrix multiplication
+        scores = scores / sqrt(d_model)  # Scale
+        
+        # 3. Apply causal mask (can't see future)
+        scores = mask_future(scores)
+        
+        # 4. Convert to probabilities
+        attention_weights = softmax(scores)
+        
+        # 5. Gather information
+        output = attention_weights @ V
+        
+        return output
+```
+
+### 3. Full Model Structure
+
+```python
+class TinyGPT:
+    def __init__(self):
+        # 1. Convert tokens to vectors
+        self.token_embedding = Embedding(vocab_size, d_model)
+        self.position_embedding = Embedding(max_length, d_model)
+        
+        # 2. Stack of transformer blocks
+        self.blocks = [
+            TransformerBlock(),  # Attention + FeedForward
+            TransformerBlock(),
+            TransformerBlock(),
+            TransformerBlock(),
+        ]
+        
+        # 3. Output layer: vectors → probabilities
+        self.output = Linear(d_model, vocab_size)
+    
+    def forward(self, token_ids):
+        # Get embeddings
+        x = self.token_embedding(token_ids)
+        x = x + self.position_embedding(positions)
+        
+        # Process through transformer blocks
+        for block in self.blocks:
+            x = block(x)
+        
+        # Get predictions
+        logits = self.output(x)
+        return logits  # Probability for each token
+```
+
+### 4. Generation (How to Create Text)
+
+```python
+def generate(prompt, max_tokens=100):
+    # Start with prompt
+    tokens = tokenizer.encode(prompt)  # "Hello" → [7, 4, 11, 11, 14]
+    
+    for _ in range(max_tokens):
+        # 1. Get model prediction
+        logits = model(tokens)
+        
+        # 2. Get probabilities for next token
+        probs = softmax(logits[-1])  # Last position
+        
+        # 3. Sample next token
+        next_token = sample(probs)  # Weighted random choice
+        
+        # 4. Add to sequence
+        tokens.append(next_token)
+    
+    # Convert back to text
+    return tokenizer.decode(tokens)
+```
+
+---
+
+## Performance Tuning for M4 Mac
+
+### Challenge: Balancing Quality vs Speed
+
+Training a language model involves many tradeoffs. Here's how we optimized for the M4 Mac:
+
+### 1. Device Selection: MPS (Metal Performance Shaders)
+
+```python
+def get_device():
+    if torch.backends.mps.is_available():
+        # Use Apple's GPU via Metal
+        return torch.device("mps")
+    elif torch.cuda.is_available():
+        return torch.device("cuda")
+    else:
+        return torch.device("cpu")
+```
+
+**Why MPS?**
+- M4 has powerful GPU cores that accelerate tensor operations
+- 5-10x faster than CPU for matrix multiplications
+- PyTorch 2.0+ has good MPS backend support
+- Note: M4 NPU (Neural Engine) isn't directly supported by PyTorch yet
+
+### 2. Model Size Optimization
+
+We went through several iterations:
+
+| Version | Params | Speed (it/s) | Quality | Issue |
+|---------|--------|--------------|---------|-------|
+| Initial | 200K | ~5 | Poor | Too small for WT-103 |
+| Large | 24M | ~0.05 | ? | Too slow, appeared frozen |
+| **Final** | **~5M** | **~1-2** | **Good** | ✅ Balanced |
+
+**Final Configuration:**
+```python
+n_layer = 4        # Layers: Each adds depth but slows training
+n_head = 8         # Heads: More = better attention, but diminishing returns
+d_model = 256      # Embedding dim: Bigger = more capacity, more memory
+d_ff = 1024        # Feedforward: Usually 4x d_model
+block_size = 128   # Context: Longer = better but O(n²) attention cost
+```
+
+**Parameter Count Calculation:**
+```
+Embeddings: vocab_size * d_model = 5006 * 256 = 1.28M
+Position: block_size * d_model = 128 * 256 = 33K
+Each Transformer Block: ~4 * d_model² + 2 * d_model * d_ff = ~786K
+4 Blocks: 4 * 786K = 3.14M
+Output Head: d_model * vocab_size = 256 * 5006 = 1.28M
+
+Total: ~5.7M parameters
+```
+
+### 3. Batch Size Tuning
+
+```python
+batch_size = 64  # Number of sequences processed in parallel
+```
+
+**Tradeoff:**
+- **Larger batch** → Better GPU utilization, more stable gradients
+- **Smaller batch** → Less memory, faster iteration, more noisy gradients
+
+**Why 64?**
+- Fits comfortably in M4 memory (~16GB unified)
+- Good GPU utilization
+- Not so large that it slows down each iteration
+
+### 4. Gradient Accumulation
+
+```python
+grad_accum_steps = 2  # Effective batch size = 64 * 2 = 128
+```
+
+**How it works:**
+```python
+optimizer.zero_grad()
+for micro_step in range(grad_accum_steps):
+    xb, yb = get_batch(train_data, batch_size, block_size, DEVICE)
+    loss = model(xb, yb) / grad_accum_steps  # Scale loss
+    loss.backward()  # Accumulate gradients
+optimizer.step()  # Update once after all micro-batches
+```
+
+**Benefits:**
+- Simulate larger batch size (128) without OOM
+- Better gradient estimates
+- Minimal memory overhead
+
+### 5. Context Window (block_size)
+
+```python
+block_size = 128  # Number of tokens the model sees at once
+```
+
+**Attention Complexity: O(n²)**
+
+| Context | Attention Cost | Memory |
+|---------|----------------|--------|
+| 64 | 4,096 | Low |
+| 128 | 16,384 | Medium |
+| 256 | 65,536 | High |
+| 512 | 262,144 | Very High |
+
+**Why 128?**
+- Good balance for character-level (roughly 1-2 sentences)
+- Attention cost is manageable
+- Fits in memory with other tensors
+
+### 6. Training Duration
+
+```python
+epochs = 15           # Full passes through dataset
+iters_per_epoch = 300 # Training steps per epoch
+# Total: 15 * 300 = 4,500 batches
+```
+
+**Calculation for WT-103:**
+```
+Dataset size: 539M characters
+Tokens per batch: 64 * 128 = 8,192
+Total tokens per epoch: 300 * 8,192 = 2.46M tokens
+Coverage per epoch: 2.46M / 539M = 0.46%
+
+After 15 epochs: 15 * 2.46M = 36.9M tokens seen (~7% of dataset)
+```
+
+**Why this matters:**
+- Character-level models need to see more examples
+- WT-103 is very large (539M characters)
+- We're training on a subset for speed
+- For production: train for 50+ epochs or use subword tokenization
+
+### 7. Learning Rate Schedule
+
+```python
+lr = 5e-4              # Peak learning rate
+warmup_iters = 100     # Gradually increase LR at start
+
+# Warmup implementation
+if global_step < warmup_iters:
+    lr_scale = global_step / warmup_iters
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr * lr_scale
+```
+
+**Why warmup?**
+- Prevents large updates early when model is random
+- More stable training
+- Common practice for transformers
+
+**Learning Rate Choice:**
+- Too high: Training diverges
+- Too low: Learns too slowly
+- `5e-4` is a good default for AdamW
+
+### 8. Memory Optimization: NumPy Stack
+
+```python
+# Before (slow, warning message)
+x = [data[i:i+block_size] for i in ix]
+x = torch.tensor(x, device=device)
+
+# After (fast, no warning)
+x = np.stack([data[i:i+block_size] for i in ix])
+x = torch.from_numpy(x).to(device)
+```
+
+**Why?**
+- Creating tensors from lists of arrays is slow
+- Stack into single NumPy array first
+- Then convert to PyTorch tensor
+- ~2x faster data loading
+
+---
+
+## Common Questions
+
+### Q: Why is my generated text gibberish at first?
+
+**A**: The model starts with random parameters! It takes time to learn patterns. Loss should decrease over epochs:
+- Epoch 1: Loss ~4.0, text is random
+- Epoch 5: Loss ~2.5, some patterns emerge
+- Epoch 15: Loss ~1.8, readable text
+
+### Q: Why character-level instead of words?
+
+**A**: 
+- ✅ Simple vocabulary (~65 chars vs millions of words)
+- ✅ No out-of-vocabulary problems
+- ✅ Can generate any word, including new ones
+- ❌ Longer sequences (more computation)
+
+For learning, character-level is perfect!
+
+### Q: What's the difference between training and inference?
+
+**Training**: Adjusting parameters to minimize loss
+- Requires: input + target (correct answer)
+- Backpropagation, gradients, optimizer
+- Slow (hours)
+
+**Inference**: Using trained model to generate
+- Requires: only input (prompt)
+- No backpropagation
+- Fast (seconds)
+
+### Q: Why does it use so much memory?
+
+**Main memory users:**
+1. **Model parameters**: 5M parameters × 4 bytes = 20MB
+2. **Activations**: Intermediate values during forward pass
+3. **Gradients**: Derivatives for backprop
+4. **Optimizer state**: Adam stores momentum for each parameter
+
+Batch size × sequence length has huge impact!
+
+### Q: What is MPS?
+
+**MPS (Metal Performance Shaders)**: Apple's GPU acceleration framework
+- Uses M4 GPU (not NPU)
+- 5-10× faster than CPU for deep learning
+- PyTorch supports it natively on Mac
+
+### Q: Can I use the NPU instead of GPU?
+
+**A**: No, not directly with PyTorch. The M4's Neural Engine (NPU) is only accessible through Core ML and only for inference, not training. For training, MPS (GPU) is your best option.
+
+### Q: How do I know if training is working?
+
+**Good signs:**
+- Loss decreases over time
+- Validation loss follows training loss
+- Generated text improves quality
+- No NaN or Inf in loss
+
+**Bad signs:**
+- Loss doesn't decrease (learning rate too low?)
+- Loss explodes (learning rate too high?)
+- Validation loss increases while training loss decreases (overfitting)
+
+### Q: Why does the first iteration take so long?
+
+**A**: MPS compiles GPU kernels on first use. This can take 10-30 seconds. Subsequent iterations are much faster (~1 second each).
+
+---
+
+## Key Parameters Explained
+
+### Model Size Parameters:
+
+**d_model (embedding dimension)**: 256
+- Size of vectors representing each token
+- Larger = more capacity to capture nuances
+- Smaller = faster, less memory
+
+**n_layer (number of layers)**: 4
+- How many transformer blocks to stack
+- More layers = deeper understanding
+- But: more computation
+
+**n_head (number of attention heads)**: 8
+- How many different attention patterns to learn
+- More heads = capture more relationships
+- Must divide d_model evenly
+
+**d_ff (feedforward dimension)**: 1024
+- Size of intermediate layer in feedforward network
+- Usually 4× d_model
+
+**block_size (context window)**: 128
+- How many tokens to look at at once
+- Larger = better long-range understanding
+- But: O(n²) complexity (gets expensive fast!)
+
+### Training Parameters:
+
+**batch_size**: 64
+- How many sequences to process in parallel
+- Tuned for M4 Mac memory
+
+**learning_rate**: 5e-4
+- How much to adjust parameters each step
+- Standard for transformers
+
+**epochs**: 15
+- How many times to go through dataset
+- Balance between learning and overfitting
+
+**gradient_accumulation_steps**: 2
+- Simulate larger batch (64 × 2 = 128 effective)
+- Better gradients without memory issues
+
+---
+
+## Next Steps
+
+Now that you understand the basics:
+
+1. **Run the training** and watch the loss decrease
+2. **Experiment with hyperparameters**:
+   - Change `n_layer` (2, 4, 6)
+   - Change `d_model` (128, 256, 512)
+   - Change `batch_size`
+3. **Try different datasets** (Shakespeare vs WT-103)
+4. **Modify the code**:
+   - Add learning rate scheduling
+   - Try different optimizers
+   - Implement beam search for generation
+5. **Generate text** with `inference.py` after training
+
+---
+
+## Glossary
+
+**Attention**: Mechanism allowing tokens to gather information from other tokens  
+**Backpropagation**: Algorithm for computing gradients (how to adjust parameters)  
+**Batch**: Group of examples processed together  
+**Causal**: Only looking at past, not future (important for text generation)  
+**Cross-entropy**: Loss function measuring prediction quality  
+**Embedding**: Converting tokens to dense vectors  
+**Epoch**: One complete pass through the training dataset  
+**Gradient**: Direction and magnitude to adjust a parameter  
+**Hyperparameter**: Setting you choose (not learned), like learning rate  
+**Inference**: Using a trained model to make predictions  
+**Layer**: A processing step in the neural network  
+**Loss**: Measure of how wrong the model's predictions are  
+**MPS**: Metal Performance Shaders (Apple GPU framework)  
+**NPU**: Neural Processing Unit (Apple Neural Engine - not usable for training in PyTorch)  
+**Optimizer**: Algorithm for updating parameters (we use AdamW)  
+**Parameter**: Learnable number in the model (weight or bias)  
+**Softmax**: Converts numbers to probabilities (sum to 1)  
+**Token**: Basic unit (in our case, a character)  
+**Tokenization**: Converting text to tokens  
+**Transformer**: Neural network architecture using attention  
+**Vocabulary**: Set of all possible tokens  
+
+---
+
+## Helpful Resources
+
+**Beginner-Friendly:**
+- [3Blue1Brown: Neural Networks](https://www.youtube.com/playlist?list=PLZHQObOWTQDNU6R1_67000Dx_ZCJB-3pi)
+- [Andrej Karpathy: Let's build GPT](https://www.youtube.com/watch?v=kCc8FmEb1nY)
+
+**Interactive:**
+- [Transformer Explainer (Visual)](https://poloclub.github.io/transformer-explainer/)
+- [The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/)
+
+**Original Papers (Advanced):**
+- [Attention Is All You Need](https://arxiv.org/abs/1706.03762)
+- [Language Models are Unsupervised Multitask Learners (GPT-2)](https://d4mucfpksywv.cloudfront.net/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
+
+---
+
+**Questions?** Read through this guide slowly, run the code, and experiment! The best way to learn is by doing. 🚀
 
 Our Tiny GPT is a **decoder-only transformer** (like GPT-2/3/4) that predicts the next character in a sequence.
 
