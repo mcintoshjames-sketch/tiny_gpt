@@ -280,19 +280,20 @@ def main():
     train_data = np.array(tok.encode(train_text), dtype=np.int32)
     val_data = np.array(tok.encode(valid_text), dtype=np.int32)
 
-    # Hyperparameters for WT-103 (balanced for M4 speed and quality)
+    # Hyperparameters for WT-103 (optimized for 6-hour overnight training on M4)
     batch_size = 64  # Reasonable batch size for M4
     block_size = 128  # Good context window
     n_layer = 4  # Good depth without being too slow
     n_head = 8  # Multiple attention heads
     d_model = 256  # Reasonable embedding dimension
     d_ff = 1024  # Feedforward dimension
-    epochs = 15  # Good amount of training
-    iters_per_epoch = 300  # Reasonable iterations
-    lr = 5e-4  # Good learning rate
-    warmup_iters = 100  # Longer warmup
+    epochs = 80  # ~6 hours of training (45min/15epochs * 80/15 ≈ 240min = 4hrs, but slower iterations add time)
+    iters_per_epoch = 400  # More gradient steps per epoch for better convergence
+    lr = 5e-4  # Peak learning rate
+    warmup_iters = 200  # Longer warmup for stability
+    min_lr = 5e-5  # Minimum learning rate for cosine decay (10% of peak)
 
-    model = TinyGPT(tok.vocab_size, block_size, n_layer, n_head, d_model, d_ff, dropout=0.1).to(DEVICE)
+    model = TinyGPT(tok.vocab_size, block_size, n_layer, n_head, d_model, d_ff, dropout=0.15).to(DEVICE)
     print(f"\nModel parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Training on: {DEVICE}\n")
     
@@ -300,6 +301,10 @@ def main():
     
     # Gradient accumulation for larger effective batch size
     grad_accum_steps = 2  # Effective batch size = 64 * 2 = 128 (more reasonable)
+    
+    # Track best validation loss for checkpointing
+    best_val_loss = float('inf')
+    total_iters = epochs * iters_per_epoch
 
     # Training loop
     model.train()
@@ -308,11 +313,19 @@ def main():
     for epoch in range(epochs):
         pbar = tqdm(range(iters_per_epoch), desc=f"Epoch {epoch+1}/{epochs}")
         for it in pbar:
-            # Warmup
+            # Learning rate schedule: warmup + cosine decay
             if global_step < warmup_iters:
+                # Linear warmup
                 lr_scale = global_step / warmup_iters
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = lr * lr_scale
+                current_lr = lr * lr_scale
+            else:
+                # Cosine annealing from lr to min_lr
+                decay_ratio = (global_step - warmup_iters) / (total_iters - warmup_iters)
+                coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+                current_lr = min_lr + coeff * (lr - min_lr)
+            
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = current_lr
             
             # Gradient accumulation
             optimizer.zero_grad()
@@ -328,13 +341,41 @@ def main():
             optimizer.step()
             global_step += 1
             
-            if it % 50 == 0:
+            # Evaluate and display progress every 100 iterations
+            if it % 100 == 0:
                 losses = estimate_loss(model, train_data, val_data, batch_size, block_size, DEVICE, eval_iters=10)
                 pbar.set_postfix(
                     train_loss=f"{losses['train']:.4f}", 
                     val_loss=f"{losses['val']:.4f}",
-                    batch_loss=f"{accum_loss:.4f}"
+                    batch_loss=f"{accum_loss:.4f}",
+                    lr=f"{current_lr:.2e}"
                 )
+        
+        # Evaluate at end of each epoch and save best model
+        losses = estimate_loss(model, train_data, val_data, batch_size, block_size, DEVICE, eval_iters=20)
+        print(f"\nEpoch {epoch+1}/{epochs} complete - Train: {losses['train']:.4f}, Val: {losses['val']:.4f}")
+        
+        # Save checkpoint if this is the best model so far
+        if losses['val'] < best_val_loss:
+            best_val_loss = losses['val']
+            checkpoint = {
+                "model_state": model.state_dict(),
+                "tok_itos": tok.itos,
+                "tok_stoi": tok.stoi,
+                "config": {
+                    "vocab_size": tok.vocab_size,
+                    "block_size": block_size,
+                    "n_layer": n_layer,
+                    "n_head": n_head,
+                    "d_model": d_model,
+                    "d_ff": d_ff,
+                },
+                "train_loss": losses['train'],
+                "val_loss": losses['val'],
+                "epoch": epoch + 1
+            }
+            torch.save(checkpoint, "tiny_gpt_best.pt")
+            print(f"✓ Saved best model (val_loss={best_val_loss:.4f}) to tiny_gpt_best.pt")
 
     # Generate sample
     print("\n=== Generating sample ===")
@@ -345,7 +386,8 @@ def main():
     generated = tok.decode(out[0].tolist())
     print(generated)
     
-    # Save checkpoint
+    # Save final checkpoint
+    print(f"\nTraining complete! Best validation loss: {best_val_loss:.4f}")
     checkpoint = {
         "model_state": model.state_dict(),
         "tok_itos": tok.itos,
@@ -359,8 +401,10 @@ def main():
             "d_ff": d_ff,
         }
     }
-    torch.save(checkpoint, "tiny_gpt_checkpoint.pt")
-    print("\nCheckpoint saved to tiny_gpt_checkpoint.pt")
+    torch.save(checkpoint, "tiny_gpt_final.pt")
+    print("Final checkpoint saved to tiny_gpt_final.pt")
+    print("Best model saved to tiny_gpt_best.pt")
+    print("\n🎉 Training finished! Use tiny_gpt_best.pt for inference.")
 
 if __name__ == "__main__":
     main()

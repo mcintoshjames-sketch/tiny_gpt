@@ -65,8 +65,8 @@ def main():
     parser = argparse.ArgumentParser(description="Generate text with Tiny GPT")
     parser.add_argument(
         "--checkpoint",
-        default="tiny_gpt_checkpoint.pt",
-        help="Path to checkpoint (default: tiny_gpt_checkpoint.pt)",
+        default="tiny_gpt_best.pt",
+        help="Path to checkpoint (default: tiny_gpt_best.pt)",
     )
     parser.add_argument(
         "--prompt",
