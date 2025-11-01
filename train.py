@@ -225,10 +225,11 @@ class CausalSelfAttention(nn.Module):
 
 def get_batch(data, batch_size, block_size, device):
     ix = np.random.randint(0, len(data) - block_size, (batch_size,))
-    x = [data[i:i+block_size] for i in ix]
-    y = [data[i+1:i+block_size+1] for i in ix]
-    x = torch.tensor(x, dtype=torch.long, device=device)
-    y = torch.tensor(y, dtype=torch.long, device=device)
+    # Stack as numpy array first for faster conversion
+    x = np.stack([data[i:i+block_size] for i in ix])
+    y = np.stack([data[i+1:i+block_size+1] for i in ix])
+    x = torch.from_numpy(x).to(device)
+    y = torch.from_numpy(y).to(device)
     return x, y
 
 @torch.no_grad()
