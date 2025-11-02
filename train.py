@@ -773,6 +773,8 @@ def main():
             # Backup to Google Drive if available
             if backup_dir:
                 try:
+                    # Ensure backup directory exists
+                    os.makedirs(backup_dir, exist_ok=True)
                     shutil.copy("tiny_gpt_best.pt", os.path.join(backup_dir, "tiny_gpt_best.pt"))
                     if use_bpe:
                         shutil.copy("tokenizer_bpe_best.json", os.path.join(backup_dir, "tokenizer_bpe_best.json"))
