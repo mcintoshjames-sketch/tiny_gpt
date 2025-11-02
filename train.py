@@ -727,15 +727,11 @@ def main():
             
             global_step += 1
             
-            # Evaluate and display progress every 100 iterations
-            if it % 100 == 0:
-                losses = estimate_loss(model, train_data, val_data, batch_size, block_size, DEVICE, eval_iters=10)
-                pbar.set_postfix(
-                    train_loss=f"{losses['train']:.4f}", 
-                    val_loss=f"{losses['val']:.4f}",
-                    batch_loss=f"{accum_loss:.4f}",
-                    lr=f"{current_lr:.2e}"
-                )
+            # Display progress with current batch loss
+            pbar.set_postfix(
+                batch_loss=f"{accum_loss:.4f}",
+                lr=f"{current_lr:.2e}"
+            )
         
         # Evaluate at end of each epoch and save best model
         losses = estimate_loss(model, train_data, val_data, batch_size, block_size, DEVICE, eval_iters=20)
