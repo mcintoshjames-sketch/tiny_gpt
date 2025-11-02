@@ -343,19 +343,39 @@ def main():
     if use_bpe:
         print("Using BPE (Byte-Pair Encoding) tokenizer for efficient subword tokenization")
         vocab_size = 4096  # Good balance: smaller than char-level, captures subwords
-        tok = BPETokenizer(vocab_size=vocab_size)
         
         # Check if tokenizer already exists
         tokenizer_path = "tokenizer_bpe.json"
+        tokenizer_loaded = False
+        
         if os.path.exists(tokenizer_path):
-            print(f"Loading existing tokenizer from {tokenizer_path}")
-            tok.load(tokenizer_path)
-        else:
+            print(f"Found existing tokenizer at {tokenizer_path}")
+            try:
+                tok = BPETokenizer(vocab_size=vocab_size)
+                tok.load(tokenizer_path)
+                
+                # Verify tokenizer works correctly
+                test_text = "Hello world, this is a test."
+                test_ids = tok.encode(test_text)
+                test_decoded = tok.decode(test_ids)
+                
+                # Check if vocab size is reasonable
+                if len(test_ids) == 0 or max(test_ids) >= vocab_size * 2:
+                    raise ValueError("Tokenizer appears corrupted or has wrong vocab size")
+                
+                print(f"✓ Loaded existing BPE tokenizer (vocab_size={tok.vocab_size})")
+                tokenizer_loaded = True
+            except Exception as e:
+                print(f"⚠️  Failed to load existing tokenizer: {e}")
+                print("   Training new BPE tokenizer...")
+        
+        if not tokenizer_loaded:
             print("Training BPE tokenizer on combined train+validation data...")
+            tok = BPETokenizer(vocab_size=vocab_size)
             combined_text = train_text + valid_text
             tok.train(combined_text)
             tok.save(tokenizer_path)
-            print(f"Tokenizer saved to {tokenizer_path}")
+            print(f"✓ Tokenizer saved to {tokenizer_path}")
         
         print(f"Vocabulary size: {tok.vocab_size}")
     else:
