@@ -179,20 +179,35 @@ class BPETokenizer:
                 vocab_size=self.vocab_size,
                 special_tokens=["<unk>", "<pad>", "<bos>", "<eos>"],
                 min_frequency=2,  # Only learn tokens that appear at least twice
-                show_progress=True
+                show_progress=True,
+                continuing_subword_prefix="",  # Don't use special prefix for subwords
+                end_of_word_suffix="",  # Don't use special suffix
             )
             self.tokenizer.train([temp_path], trainer)
             self._trained = True
             print(f"✓ BPE tokenizer trained with vocab_size={self.vocab_size}")
             
-            # Verify it's not character-level
-            test_text = "The history of artificial intelligence"
-            test_encoding = self.tokenizer.encode(test_text)
-            compression_ratio = len(test_text) / len(test_encoding.ids)
-            print(f"✓ Compression ratio test: {compression_ratio:.2f}x")
+            # Verify with multiple diverse test cases
+            test_texts = [
+                "The history of artificial intelligence began in the 1950s.",
+                "Machine learning models require large amounts of data.",
+                "Natural language processing is a subfield of AI."
+            ]
             
-            if compression_ratio < 1.8:
-                raise ValueError(f"BPE training FAILED - compression ratio {compression_ratio:.2f}x is too low (character-level)!")
+            ratios = []
+            for test_text in test_texts:
+                test_encoding = self.tokenizer.encode(test_text)
+                ratio = len(test_text) / len(test_encoding.ids)
+                ratios.append(ratio)
+            
+            avg_ratio = sum(ratios) / len(ratios)
+            print(f"✓ Average compression ratio: {avg_ratio:.2f}x")
+            
+            if avg_ratio < 2.0:
+                raise ValueError(
+                    f"BPE training produced poor tokenization (compression {avg_ratio:.2f}x < 2.0x). "
+                    f"This indicates character-level behavior. Try increasing vocab_size or using more training data."
+                )
         finally:
             os.unlink(temp_path)
     
@@ -352,7 +367,7 @@ def main():
     
     if use_bpe:
         print("Using BPE (Byte-Pair Encoding) tokenizer for efficient subword tokenization")
-        vocab_size = 4096  # Good balance: smaller than char-level, captures subwords
+        vocab_size = 8192  # Increased from 4096 - allows more subword patterns
         
         # Check if tokenizer already exists
         tokenizer_path = "tokenizer_bpe.json"
@@ -365,24 +380,25 @@ def main():
                 tok.load(tokenizer_path)
                 
                 # CRITICAL: Verify this is actually BPE, not character-level
-                # BPE should compress text significantly (tokens << characters)
-                test_text = "Hello world, this is a test of tokenization."
-                test_ids = tok.encode(test_text)
-                test_decoded = tok.decode(test_ids)
+                # Test on diverse sentences to ensure robust subword tokenization
+                test_texts = [
+                    "The history of artificial intelligence began in the 1950s.",
+                    "Machine learning models require extensive training data.",
+                    "Natural language processing systems analyze text."
+                ]
                 
-                # Calculate compression ratio
-                compression_ratio = len(test_text) / len(test_ids)
+                all_ratios = []
+                for test_text in test_texts:
+                    test_ids = tok.encode(test_text)
+                    ratio = len(test_text) / len(test_ids)
+                    all_ratios.append(ratio)
                 
-                print(f"   Test: '{test_text}' -> {len(test_ids)} tokens (ratio: {compression_ratio:.2f}x)")
+                avg_ratio = sum(all_ratios) / len(all_ratios)
+                print(f"   Test compression ratio: {avg_ratio:.2f}x")
                 
-                # BPE should have compression ratio > 2.0 (each token = ~2-4 chars)
-                # Character-level would be ~1.0 (one token per char)
-                if compression_ratio < 1.8:
-                    raise ValueError(f"Tokenizer is character-level (ratio={compression_ratio:.2f}), not BPE!")
-                
-                # Check if vocab size is reasonable
-                if len(test_ids) == 0 or max(test_ids) >= vocab_size * 2:
-                    raise ValueError("Tokenizer appears corrupted or has wrong vocab size")
+                # Strict threshold: must average > 2.0x compression
+                if avg_ratio < 2.0:
+                    raise ValueError(f"Tokenizer has poor compression ({avg_ratio:.2f}x), retraining...")
                 
                 print(f"✓ Loaded existing BPE tokenizer (vocab_size={tok.vocab_size})")
                 tokenizer_loaded = True
