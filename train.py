@@ -354,10 +354,21 @@ def main():
                 tok = BPETokenizer(vocab_size=vocab_size)
                 tok.load(tokenizer_path)
                 
-                # Verify tokenizer works correctly
-                test_text = "Hello world, this is a test."
+                # CRITICAL: Verify this is actually BPE, not character-level
+                # BPE should compress text significantly (tokens << characters)
+                test_text = "Hello world, this is a test of tokenization."
                 test_ids = tok.encode(test_text)
                 test_decoded = tok.decode(test_ids)
+                
+                # Calculate compression ratio
+                compression_ratio = len(test_text) / len(test_ids)
+                
+                print(f"   Test: '{test_text}' -> {len(test_ids)} tokens (ratio: {compression_ratio:.2f}x)")
+                
+                # BPE should have compression ratio > 2.0 (each token = ~2-4 chars)
+                # Character-level would be ~1.0 (one token per char)
+                if compression_ratio < 1.8:
+                    raise ValueError(f"Tokenizer is character-level (ratio={compression_ratio:.2f}), not BPE!")
                 
                 # Check if vocab size is reasonable
                 if len(test_ids) == 0 or max(test_ids) >= vocab_size * 2:
@@ -367,7 +378,8 @@ def main():
                 tokenizer_loaded = True
             except Exception as e:
                 print(f"⚠️  Failed to load existing tokenizer: {e}")
-                print("   Training new BPE tokenizer...")
+                print("   Deleting corrupted tokenizer and training new one...")
+                os.remove(tokenizer_path)  # Delete the bad tokenizer file
         
         if not tokenizer_loaded:
             print("Training BPE tokenizer on combined train+validation data...")
