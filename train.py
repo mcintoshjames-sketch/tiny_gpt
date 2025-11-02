@@ -159,9 +159,11 @@ class BPETokenizer:
         
         self.vocab_size = vocab_size
         self.tokenizer = Tokenizer(BPE(unk_token="<unk>"))
-        # Use ByteLevel pre-tokenizer instead of Whitespace for better subword learning
+        # Use ByteLevel pre-tokenizer AND decoder for proper byte-level encoding
         from tokenizers.pre_tokenizers import ByteLevel
+        from tokenizers.decoders import ByteLevel as ByteLevelDecoder
         self.tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
+        self.tokenizer.decoder = ByteLevelDecoder()
         self._trained = False
     
     def train(self, texts):
