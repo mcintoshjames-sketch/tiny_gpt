@@ -462,10 +462,9 @@ def main():
     print(f"  Total characters to encode: {len(train_text):,}")
     
     if is_cloud and use_bpe:
-        # Colab/Cloud: Use optimized chunked encoding (20MB chunks for stability)
-        print("  Detected cloud environment - using optimized chunked encoding")
-        chunk_size = 20_000_000  # Smaller 20MB chunks - more stable on Colab
-        train_tokens = []
+        # Colab/Cloud: Use disk-based encoding to avoid memory limits
+        print("  Detected cloud environment - using disk-based encoding (memory-safe)")
+        chunk_size = 20_000_000  # 20MB chunks
         num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
         
         print(f"  Processing {num_chunks} chunks of ~{chunk_size/1e6:.0f}MB each...")
@@ -473,6 +472,14 @@ def main():
         
         import time
         import gc
+        import tempfile
+        
+        # Write tokens to a temporary file instead of keeping in memory
+        temp_token_file = tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.npy')
+        temp_token_path = temp_token_file.name
+        temp_token_file.close()
+        
+        total_tokens = 0
         
         for chunk_idx in range(num_chunks):
             i = chunk_idx * chunk_size
@@ -483,27 +490,30 @@ def main():
             
             try:
                 chunk_tokens = tok.encode(chunk)
-                train_tokens.extend(chunk_tokens)
-                elapsed = time.time() - start_time
-                print(f"✓ {len(chunk_tokens):,} tokens ({elapsed:.1f}s)")
+                num_tokens = len(chunk_tokens)
+                total_tokens += num_tokens
                 
-                # Aggressive memory management: GC after EVERY chunk
-                del chunk_tokens
-                del chunk
+                # Append tokens to file immediately (memory efficient)
+                chunk_array = np.array(chunk_tokens, dtype=np.int32)
+                with open(temp_token_path, 'ab') as f:
+                    chunk_array.tofile(f)
+                
+                elapsed = time.time() - start_time
+                print(f"✓ {num_tokens:,} tokens ({elapsed:.1f}s, total: {total_tokens:,})")
+                
+                # Free memory immediately
+                del chunk_tokens, chunk_array, chunk
                 gc.collect()
                 
-                # Extra aggressive: convert to numpy array every 5 chunks to free Python list memory
-                if (chunk_idx + 1) % 5 == 0:
-                    print(f"  [Memory checkpoint: {len(train_tokens):,} tokens accumulated]")
-                    
             except Exception as e:
                 print(f"\n  ❌ Error encoding chunk {chunk_idx+1}: {e}")
+                os.unlink(temp_token_path)
                 raise
         
-        print(f"  Converting {len(train_tokens):,} tokens to numpy array...")
-        train_data = np.array(train_tokens, dtype=np.int32)
-        del train_tokens
-        gc.collect()
+        # Load all tokens from file at once
+        print(f"  Loading {total_tokens:,} tokens from disk...")
+        train_data = np.fromfile(temp_token_path, dtype=np.int32)
+        os.unlink(temp_token_path)
         print(f"✓ Training tokens: {len(train_data):,}")
     else:
         # Local Mac: Chunked encoding (memory-safe for M4 with 8-16GB RAM)
