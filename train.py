@@ -171,33 +171,35 @@ class BPETokenizer:
             if isinstance(texts, list):
                 for text in texts:
                     f.write(text + '\n')
+                num_lines = len(texts)
             else:
                 # Split long text into lines for BPE to learn patterns
-                # Use existing line breaks, or split every 1000 chars if none
-                lines = texts.split('\n')
-                if len(lines) < 100:  # If very few lines, split more
-                    # Split into ~1000 char chunks
-                    chunk_size = 1000
-                    lines = [texts[i:i+chunk_size] for i in range(0, len(texts), chunk_size)]
+                # Use existing line breaks
+                lines = [line for line in texts.split('\n') if line.strip()]
+                print(f"  Splitting {len(texts):,} chars into {len(lines):,} lines...")
                 
                 for line in lines:
-                    if line.strip():  # Only write non-empty lines
-                        f.write(line + '\n')
+                    f.write(line + '\n')
+                num_lines = len(lines)
+            
             temp_path = f.name
+        
+        print(f"  Wrote {num_lines:,} lines to training file")
         
         try:
             # Configure BPE trainer to actually learn subword merges
-            # Key: initial_alphabet must include common characters
+            # The key is to let it build from character level UP to subwords
             trainer = BpeTrainer(
                 vocab_size=self.vocab_size,
                 special_tokens=["<unk>"],
                 min_frequency=2,  # Learn tokens appearing >= 2 times
                 show_progress=True,
-                # CRITICAL: Don't set these to empty string - breaks BPE learning
-                # continuing_subword_prefix and end_of_word_suffix help BPE learn merges
+                # Let BPE learn character combinations naturally
+                initial_alphabet=[]  # Start from scratch, learn all characters
             )
             
-            print(f"  Training on {len(texts) if isinstance(texts, str) else 'multiple'} texts...")
+            num_lines = texts.count('\n') if isinstance(texts, str) else len(texts)
+            print(f"  Training on {num_lines:,} lines...")
             self.tokenizer.train([temp_path], trainer)
             self._trained = True
             print(f"✓ BPE tokenizer trained with vocab_size={self.vocab_size}")
