@@ -338,8 +338,9 @@ def get_batch(data, batch_size, block_size, device):
     # Stack as numpy array first for faster conversion
     x = np.stack([data[i:i+block_size] for i in ix])
     y = np.stack([data[i+1:i+block_size+1] for i in ix])
-    x = torch.from_numpy(x).to(device)
-    y = torch.from_numpy(y).to(device)
+    # Convert to long (int64) for PyTorch CUDA compatibility
+    x = torch.from_numpy(x).long().to(device)
+    y = torch.from_numpy(y).long().to(device)
     return x, y
 
 @torch.no_grad()
