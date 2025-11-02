@@ -433,29 +433,31 @@ def main():
     is_cloud = 'COLAB_GPU' in os.environ or 'KAGGLE_KERNEL_RUN_TYPE' in os.environ or not platform.processor()
     
     if is_cloud and use_bpe:
-        # Colab/Cloud: Single-pass encoding (faster, uses more RAM but Colab has 12GB+)
-        print("  Detected cloud environment - using single-pass encoding (faster)")
-        try:
-            train_tokens = tok.encode(train_text)
-            train_data = np.array(train_tokens, dtype=np.int32)
-            del train_tokens
-            print(f"✓ Training tokens: {len(train_data):,}")
-        except Exception as e:
-            print(f"  Single-pass failed ({e}), falling back to chunked encoding...")
-            # Fallback to chunked if single-pass fails
-            chunk_size = 50_000_000  # Larger chunks for cloud
-            train_tokens = []
-            num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
-            
-            with tqdm(total=num_chunks, desc="  Encoding chunks", unit="chunk") as pbar:
-                for i in range(0, len(train_text), chunk_size):
-                    chunk = train_text[i:i+chunk_size]
-                    train_tokens.extend(tok.encode(chunk))
-                    pbar.update(1)
-            
-            train_data = np.array(train_tokens, dtype=np.int32)
-            del train_tokens
-            print(f"✓ Training tokens: {len(train_data):,}")
+        # Colab/Cloud: Use optimized chunked encoding (50MB chunks)
+        # Single-pass uses too much memory for 539MB text + tokenization overhead
+        print("  Detected cloud environment - using optimized chunked encoding")
+        chunk_size = 50_000_000  # 50MB chunks - good balance for Colab
+        train_tokens = []
+        num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
+        
+        print(f"  Processing {num_chunks} chunks of ~{chunk_size/1e6:.0f}MB each...")
+        with tqdm(total=num_chunks, desc="  Encoding", unit="chunk") as pbar:
+            for i in range(0, len(train_text), chunk_size):
+                chunk = train_text[i:i+chunk_size]
+                chunk_tokens = tok.encode(chunk)
+                train_tokens.extend(chunk_tokens)
+                pbar.update(1)
+                
+                # Explicitly free memory every 5 chunks
+                if (i // chunk_size) % 5 == 0:
+                    import gc
+                    gc.collect()
+        
+        train_data = np.array(train_tokens, dtype=np.int32)
+        del train_tokens
+        import gc
+        gc.collect()
+        print(f"✓ Training tokens: {len(train_data):,}")
     else:
         # Local Mac: Chunked encoding (memory-safe for M4 with 8-16GB RAM)
         print("  Using chunked encoding for memory safety")
