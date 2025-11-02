@@ -151,13 +151,20 @@ def diagnose():
         output_ids = model.generate(input_ids, max_new_tokens=50, temperature=0.8)
     
     generated_text = tok.decode(output_ids[0].tolist())
+    
+    # Show raw output with markers
     print(f"\nPrompt: '{test_prompt}'")
-    print(f"Generated: '{generated_text}'")
+    print(f"Raw output: '{generated_text[:100]}...'")
+    
+    # Clean up ByteLevel markers for readable output
+    clean_text = generated_text.replace('Ġ', ' ').replace('Ċ', '\n').strip()
+    print(f"Clean output: '{clean_text[:100]}...'")
     
     # Analyze quality
     if "Ġ" in generated_text or "Ċ" in generated_text:
         print("\n✓ ByteLevel encoding detected (Ġ = space, Ċ = newline)")
         print("  This is normal for proper BPE tokenization!")
+        print("  inference.py now automatically cleans these markers for readable output")
     
     print("\n" + "=" * 80)
 

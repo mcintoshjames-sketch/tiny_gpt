@@ -80,6 +80,14 @@ def generate(model, tok, prompt, max_new_tokens=200, temperature=0.8, device="cp
     
     # Decode
     generated_text = tok.decode(output_ids[0].tolist())
+    
+    # Clean up ByteLevel BPE markers (Ġ = space, Ċ = newline)
+    # These are internal markers from the ByteLevel pre-tokenizer
+    generated_text = generated_text.replace('Ġ', ' ').replace('Ċ', '\n')
+    
+    # Clean up any leading/trailing whitespace
+    generated_text = generated_text.strip()
+    
     return generated_text
 
 
