@@ -424,26 +424,60 @@ def main():
         tok = CharTokenizer(combined_text)
         print(f"Vocabulary size: {tok.vocab_size}")
     
-    # Encode both datasets in chunks to avoid memory issues
-    print("Encoding training data...")
-    chunk_size = 10_000_000  # Process 10MB of text at a time
-    train_tokens = []
+    # Encode both datasets - optimized for environment
+    print("\nEncoding training data...")
+    print(f"  Total characters to encode: {len(train_text):,}")
     
-    for i in range(0, len(train_text), chunk_size):
-        chunk = train_text[i:i+chunk_size]
-        train_tokens.extend(tok.encode(chunk))
-        if (i // chunk_size + 1) % 10 == 0:
-            print(f"  Processed {i+len(chunk):,} / {len(train_text):,} characters...")
+    # Detect if running on Colab/cloud (more RAM available) vs local Mac
+    import platform
+    is_cloud = 'COLAB_GPU' in os.environ or 'KAGGLE_KERNEL_RUN_TYPE' in os.environ or not platform.processor()
     
-    train_data = np.array(train_tokens, dtype=np.int32)
-    del train_tokens  # Free memory
-    print(f"Training tokens: {len(train_data):,}")
+    if is_cloud and use_bpe:
+        # Colab/Cloud: Single-pass encoding (faster, uses more RAM but Colab has 12GB+)
+        print("  Detected cloud environment - using single-pass encoding (faster)")
+        try:
+            train_tokens = tok.encode(train_text)
+            train_data = np.array(train_tokens, dtype=np.int32)
+            del train_tokens
+            print(f"✓ Training tokens: {len(train_data):,}")
+        except Exception as e:
+            print(f"  Single-pass failed ({e}), falling back to chunked encoding...")
+            # Fallback to chunked if single-pass fails
+            chunk_size = 50_000_000  # Larger chunks for cloud
+            train_tokens = []
+            num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
+            
+            with tqdm(total=num_chunks, desc="  Encoding chunks", unit="chunk") as pbar:
+                for i in range(0, len(train_text), chunk_size):
+                    chunk = train_text[i:i+chunk_size]
+                    train_tokens.extend(tok.encode(chunk))
+                    pbar.update(1)
+            
+            train_data = np.array(train_tokens, dtype=np.int32)
+            del train_tokens
+            print(f"✓ Training tokens: {len(train_data):,}")
+    else:
+        # Local Mac: Chunked encoding (memory-safe for M4 with 8-16GB RAM)
+        print("  Using chunked encoding for memory safety")
+        chunk_size = 10_000_000  # 10MB chunks for local
+        train_tokens = []
+        num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
+        
+        with tqdm(total=num_chunks, desc="  Encoding chunks", unit="chunk") as pbar:
+            for i in range(0, len(train_text), chunk_size):
+                chunk = train_text[i:i+chunk_size]
+                train_tokens.extend(tok.encode(chunk))
+                pbar.update(1)
+        
+        train_data = np.array(train_tokens, dtype=np.int32)
+        del train_tokens
+        print(f"✓ Training tokens: {len(train_data):,}")
     
-    print("Encoding validation data...")
+    print("\nEncoding validation data...")
     val_tokens = tok.encode(valid_text)
     val_data = np.array(val_tokens, dtype=np.int32)
-    del val_tokens  # Free memory
-    print(f"Validation tokens: {len(val_data):,}")
+    del val_tokens
+    print(f"✓ Validation tokens: {len(val_data):,}")
 
     # Hyperparameters (optimized for 6-hour overnight training on M4 with BPE)
     batch_size = 64  # Reasonable batch size for M4
