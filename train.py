@@ -159,7 +159,9 @@ class BPETokenizer:
         
         self.vocab_size = vocab_size
         self.tokenizer = Tokenizer(BPE(unk_token="<unk>"))
-        self.tokenizer.pre_tokenizer = Whitespace()
+        # Use ByteLevel pre-tokenizer instead of Whitespace for better subword learning
+        from tokenizers.pre_tokenizers import ByteLevel
+        self.tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
         self._trained = False
     
     def train(self, texts):
@@ -187,19 +189,15 @@ class BPETokenizer:
         print(f"  Wrote {num_lines:,} lines to training file")
         
         try:
-            # Configure BPE trainer to actually learn subword merges
-            # The key is to let it build from character level UP to subwords
+            # Configure BPE trainer for proper subword learning
             trainer = BpeTrainer(
                 vocab_size=self.vocab_size,
                 special_tokens=["<unk>"],
-                min_frequency=2,  # Learn tokens appearing >= 2 times
+                min_frequency=1,  # Learn all tokens (min_frequency=2 was too restrictive)
                 show_progress=True,
-                # Let BPE learn character combinations naturally
-                initial_alphabet=[]  # Start from scratch, learn all characters
             )
             
-            num_lines = texts.count('\n') if isinstance(texts, str) else len(texts)
-            print(f"  Training on {num_lines:,} lines...")
+            print(f"  Training BPE on {num_lines:,} lines with vocab_size={self.vocab_size}...")
             self.tokenizer.train([temp_path], trainer)
             self._trained = True
             print(f"✓ BPE tokenizer trained with vocab_size={self.vocab_size}")
