@@ -165,13 +165,24 @@ class BPETokenizer:
     def train(self, texts):
         """Train BPE tokenizer on text data."""
         # Save texts to temporary file for training
+        # CRITICAL: BPE needs newline-separated text to learn merges properly
         import tempfile
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
             if isinstance(texts, list):
                 for text in texts:
                     f.write(text + '\n')
             else:
-                f.write(texts)
+                # Split long text into lines for BPE to learn patterns
+                # Use existing line breaks, or split every 1000 chars if none
+                lines = texts.split('\n')
+                if len(lines) < 100:  # If very few lines, split more
+                    # Split into ~1000 char chunks
+                    chunk_size = 1000
+                    lines = [texts[i:i+chunk_size] for i in range(0, len(texts), chunk_size)]
+                
+                for line in lines:
+                    if line.strip():  # Only write non-empty lines
+                        f.write(line + '\n')
             temp_path = f.name
         
         try:
