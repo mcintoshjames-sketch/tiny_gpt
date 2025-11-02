@@ -345,6 +345,14 @@ def main():
         print("Could not download WT-103 dataset. Exiting.")
         return
     
+    # Detect environment early (needed for vocab size and encoding strategy)
+    import platform
+    is_cloud = 'COLAB_GPU' in os.environ or 'KAGGLE_KERNEL_RUN_TYPE' in os.environ or not platform.processor()
+    if is_cloud:
+        print("✓ Detected cloud environment (Colab/Kaggle)")
+    else:
+        print("✓ Detected local environment")
+    
     # Check if we should use smaller dataset for faster training
     # Delete WT-103 files and script will use TinyShakespeare fallback
     if not os.path.exists(TRAIN_PATH) or os.path.getsize(TRAIN_PATH) < 10_000_000:
@@ -434,10 +442,6 @@ def main():
     # Encode both datasets - optimized for environment
     print("\nEncoding training data...")
     print(f"  Total characters to encode: {len(train_text):,}")
-    
-    # Detect if running on Colab/cloud (more RAM available) vs local Mac
-    import platform
-    is_cloud = 'COLAB_GPU' in os.environ or 'KAGGLE_KERNEL_RUN_TYPE' in os.environ or not platform.processor()
     
     if is_cloud and use_bpe:
         # Colab/Cloud: Use optimized chunked encoding (20MB chunks for stability)
