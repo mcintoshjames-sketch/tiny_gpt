@@ -458,86 +458,132 @@ def main():
         tok = CharTokenizer(combined_text)
         print(f"Vocabulary size: {tok.vocab_size}")
     
-    # Encode both datasets - optimized for environment
-    print("\nEncoding training data...")
-    print(f"  Total characters to encode: {len(train_text):,}")
+    # Encode both datasets - with caching to avoid re-encoding
+    train_cache_path = "data/train_tokens.npy"
+    val_cache_path = "data/val_tokens.npy"
     
-    if is_cloud and use_bpe:
-        # Colab/Cloud: Use disk-based encoding to avoid memory limits
-        print("  Detected cloud environment - using disk-based encoding (memory-safe)")
-        chunk_size = 20_000_000  # 20MB chunks
-        num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
+    # Check if cached encoded data exists and matches current tokenizer
+    cache_valid = False
+    if os.path.exists(train_cache_path) and os.path.exists(val_cache_path):
+        try:
+            # Load cached tokens
+            print("\nFound cached encoded data, loading...")
+            train_data = np.load(train_cache_path)
+            val_data = np.load(val_cache_path)
+            print(f"✓ Loaded {len(train_data):,} training tokens from cache")
+            print(f"✓ Loaded {len(val_data):,} validation tokens from cache")
+            cache_valid = True
+        except Exception as e:
+            print(f"⚠️  Failed to load cache: {e}")
+            print("   Will re-encode data...")
+    
+    if not cache_valid:
+        # Encode both datasets - optimized for environment
+        print("\nEncoding training data...")
+        print(f"  Total characters to encode: {len(train_text):,}")
         
-        print(f"  Processing {num_chunks} chunks of ~{chunk_size/1e6:.0f}MB each...")
-        print(f"  First chunk preview: '{train_text[:100]}...'")
-        
-        import time
-        import gc
-        import tempfile
-        
-        # Write tokens to a temporary file instead of keeping in memory
-        temp_token_file = tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.npy')
-        temp_token_path = temp_token_file.name
-        temp_token_file.close()
-        
-        total_tokens = 0
-        
-        for chunk_idx in range(num_chunks):
-            i = chunk_idx * chunk_size
-            chunk = train_text[i:i+chunk_size]
+        if is_cloud and use_bpe:
+            # Colab/Cloud: Use disk-based encoding to avoid memory limits
+            print("  Detected cloud environment - using disk-based encoding (memory-safe)")
+            chunk_size = 20_000_000  # 20MB chunks
+            num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
             
-            print(f"  Chunk {chunk_idx+1}/{num_chunks}: {len(chunk):,} chars...", end=" ", flush=True)
-            start_time = time.time()
+            print(f"  Processing {num_chunks} chunks of ~{chunk_size/1e6:.0f}MB each...")
+            print(f"  First chunk preview: '{train_text[:100]}...'")
             
-            try:
-                chunk_tokens = tok.encode(chunk)
-                num_tokens = len(chunk_tokens)
-                total_tokens += num_tokens
-                
-                # Append tokens to file immediately (memory efficient)
-                chunk_array = np.array(chunk_tokens, dtype=np.int32)
-                with open(temp_token_path, 'ab') as f:
-                    chunk_array.tofile(f)
-                
-                elapsed = time.time() - start_time
-                print(f"✓ {num_tokens:,} tokens ({elapsed:.1f}s, total: {total_tokens:,})")
-                
-                # Free memory immediately
-                del chunk_tokens, chunk_array, chunk
-                gc.collect()
-                
-            except Exception as e:
-                print(f"\n  ❌ Error encoding chunk {chunk_idx+1}: {e}")
-                os.unlink(temp_token_path)
-                raise
-        
-        # Load all tokens from file at once
-        print(f"  Loading {total_tokens:,} tokens from disk...")
-        train_data = np.fromfile(temp_token_path, dtype=np.int32)
-        os.unlink(temp_token_path)
-        print(f"✓ Training tokens: {len(train_data):,}")
-    else:
-        # Local Mac: Chunked encoding (memory-safe for M4 with 8-16GB RAM)
-        print("  Using chunked encoding for memory safety")
-        chunk_size = 10_000_000  # 10MB chunks for local
-        train_tokens = []
-        num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
-        
-        with tqdm(total=num_chunks, desc="  Encoding chunks", unit="chunk") as pbar:
-            for i in range(0, len(train_text), chunk_size):
+            import time
+            import gc
+            import tempfile
+            
+            # Write tokens to a temporary file instead of keeping in memory
+            temp_token_file = tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.npy')
+            temp_token_path = temp_token_file.name
+            temp_token_file.close()
+            
+            total_tokens = 0
+            
+            for chunk_idx in range(num_chunks):
+                i = chunk_idx * chunk_size
                 chunk = train_text[i:i+chunk_size]
-                train_tokens.extend(tok.encode(chunk))
-                pbar.update(1)
-        
-        train_data = np.array(train_tokens, dtype=np.int32)
-        del train_tokens
-        print(f"✓ Training tokens: {len(train_data):,}")
-    
-    print("\nEncoding validation data...")
-    val_tokens = tok.encode(valid_text)
-    val_data = np.array(val_tokens, dtype=np.int32)
-    del val_tokens
-    print(f"✓ Validation tokens: {len(val_data):,}")
+                
+                print(f"  Chunk {chunk_idx+1}/{num_chunks}: {len(chunk):,} chars...", end=" ", flush=True)
+                start_time = time.time()
+                
+                try:
+                    chunk_tokens = tok.encode(chunk)
+                    num_tokens = len(chunk_tokens)
+                    total_tokens += num_tokens
+                    
+                    # Append tokens to file immediately (memory efficient)
+                    chunk_array = np.array(chunk_tokens, dtype=np.int32)
+                    with open(temp_token_path, 'ab') as f:
+                        chunk_array.tofile(f)
+                    
+                    elapsed = time.time() - start_time
+                    print(f"✓ {num_tokens:,} tokens ({elapsed:.1f}s, total: {total_tokens:,})")
+                    
+                    # Free memory immediately
+                    del chunk_tokens, chunk_array, chunk
+                    gc.collect()
+                    
+                except Exception as e:
+                    print(f"\n  ❌ Error encoding chunk {chunk_idx+1}: {e}")
+                    os.unlink(temp_token_path)
+                    raise
+            
+            # Load all tokens from file at once
+            print(f"  Loading {total_tokens:,} tokens from disk...")
+            train_data = np.fromfile(temp_token_path, dtype=np.int32)
+            os.unlink(temp_token_path)
+            print(f"✓ Training tokens: {len(train_data):,}")
+            
+            print("\nEncoding validation data...")
+            val_tokens = tok.encode(valid_text)
+            val_data = np.array(val_tokens, dtype=np.int32)
+            del val_tokens
+            print(f"✓ Validation tokens: {len(val_data):,}")
+            
+            # Save encoded tokens to cache for future runs
+            print("\nSaving encoded tokens to cache...")
+            try:
+                np.save(train_cache_path, train_data)
+                np.save(val_cache_path, val_data)
+                print(f"✓ Cached tokens saved to {train_cache_path} and {val_cache_path}")
+                print("  (Future runs will skip encoding if cache exists)")
+            except Exception as e:
+                print(f"⚠️  Failed to save cache: {e}")
+        else:
+            # Local Mac: Chunked encoding (memory-safe for M4 with 8-16GB RAM)
+            print("  Using chunked encoding for memory safety")
+            chunk_size = 10_000_000  # 10MB chunks for local
+            train_tokens = []
+            num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
+            
+            with tqdm(total=num_chunks, desc="  Encoding chunks", unit="chunk") as pbar:
+                for i in range(0, len(train_text), chunk_size):
+                    chunk = train_text[i:i+chunk_size]
+                    train_tokens.extend(tok.encode(chunk))
+                    pbar.update(1)
+            
+            train_data = np.array(train_tokens, dtype=np.int32)
+            del train_tokens
+            print(f"✓ Training tokens: {len(train_data):,}")
+            
+            print("\nEncoding validation data...")
+            val_tokens = tok.encode(valid_text)
+            val_data = np.array(val_tokens, dtype=np.int32)
+            del val_tokens
+            print(f"✓ Validation tokens: {len(val_data):,}")
+            
+            # Save encoded tokens to cache for future runs
+            print("\nSaving encoded tokens to cache...")
+            try:
+                np.save(train_cache_path, train_data)
+                np.save(val_cache_path, val_data)
+                print(f"✓ Cached tokens saved to {train_cache_path} and {val_cache_path}")
+                print("  (Future runs will skip encoding if cache exists)")
+            except Exception as e:
+                print(f"⚠️  Failed to save cache: {e}")
 
     # Hyperparameters (optimized for 6-hour overnight training on M4 with BPE)
     batch_size = 64  # Reasonable batch size for M4
