@@ -178,11 +178,21 @@ class BPETokenizer:
             trainer = BpeTrainer(
                 vocab_size=self.vocab_size,
                 special_tokens=["<unk>", "<pad>", "<bos>", "<eos>"],
+                min_frequency=2,  # Only learn tokens that appear at least twice
                 show_progress=True
             )
             self.tokenizer.train([temp_path], trainer)
             self._trained = True
             print(f"✓ BPE tokenizer trained with vocab_size={self.vocab_size}")
+            
+            # Verify it's not character-level
+            test_text = "The history of artificial intelligence"
+            test_encoding = self.tokenizer.encode(test_text)
+            compression_ratio = len(test_text) / len(test_encoding.ids)
+            print(f"✓ Compression ratio test: {compression_ratio:.2f}x")
+            
+            if compression_ratio < 1.8:
+                raise ValueError(f"BPE training FAILED - compression ratio {compression_ratio:.2f}x is too low (character-level)!")
         finally:
             os.unlink(temp_path)
     
