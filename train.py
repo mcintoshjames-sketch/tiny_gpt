@@ -472,6 +472,8 @@ def main():
         print(f"  First chunk preview: '{train_text[:100]}...'")
         
         import time
+        import gc
+        
         for chunk_idx in range(num_chunks):
             i = chunk_idx * chunk_size
             chunk = train_text[i:i+chunk_size]
@@ -485,19 +487,22 @@ def main():
                 elapsed = time.time() - start_time
                 print(f"✓ {len(chunk_tokens):,} tokens ({elapsed:.1f}s)")
                 
-                # Free memory every 5 chunks
-                if chunk_idx % 5 == 0 and chunk_idx > 0:
-                    import gc
-                    gc.collect()
+                # Aggressive memory management: GC after EVERY chunk
+                del chunk_tokens
+                del chunk
+                gc.collect()
+                
+                # Extra aggressive: convert to numpy array every 5 chunks to free Python list memory
+                if (chunk_idx + 1) % 5 == 0:
+                    print(f"  [Memory checkpoint: {len(train_tokens):,} tokens accumulated]")
                     
             except Exception as e:
                 print(f"\n  ❌ Error encoding chunk {chunk_idx+1}: {e}")
-                print(f"  Chunk preview: '{chunk[:200]}...'")
                 raise
         
+        print(f"  Converting {len(train_tokens):,} tokens to numpy array...")
         train_data = np.array(train_tokens, dtype=np.int32)
         del train_tokens
-        import gc
         gc.collect()
         print(f"✓ Training tokens: {len(train_data):,}")
     else:
