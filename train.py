@@ -367,7 +367,14 @@ def main():
     
     if use_bpe:
         print("Using BPE (Byte-Pair Encoding) tokenizer for efficient subword tokenization")
-        vocab_size = 8192  # Increased from 4096 - allows more subword patterns
+        
+        # Adjust vocab size based on environment (Colab has memory constraints during encoding)
+        if is_cloud:
+            vocab_size = 4096  # Smaller vocab for Colab (faster encoding, less memory)
+            print(f"  Cloud environment: using vocab_size={vocab_size} for faster encoding")
+        else:
+            vocab_size = 8192  # Larger vocab for local with more control
+            print(f"  Local environment: using vocab_size={vocab_size}")
         
         # Check if tokenizer already exists
         tokenizer_path = "tokenizer_bpe.json"
@@ -433,25 +440,38 @@ def main():
     is_cloud = 'COLAB_GPU' in os.environ or 'KAGGLE_KERNEL_RUN_TYPE' in os.environ or not platform.processor()
     
     if is_cloud and use_bpe:
-        # Colab/Cloud: Use optimized chunked encoding (50MB chunks)
-        # Single-pass uses too much memory for 539MB text + tokenization overhead
+        # Colab/Cloud: Use optimized chunked encoding (20MB chunks for stability)
         print("  Detected cloud environment - using optimized chunked encoding")
-        chunk_size = 50_000_000  # 50MB chunks - good balance for Colab
+        chunk_size = 20_000_000  # Smaller 20MB chunks - more stable on Colab
         train_tokens = []
         num_chunks = (len(train_text) + chunk_size - 1) // chunk_size
         
         print(f"  Processing {num_chunks} chunks of ~{chunk_size/1e6:.0f}MB each...")
-        with tqdm(total=num_chunks, desc="  Encoding", unit="chunk") as pbar:
-            for i in range(0, len(train_text), chunk_size):
-                chunk = train_text[i:i+chunk_size]
+        print(f"  First chunk preview: '{train_text[:100]}...'")
+        
+        import time
+        for chunk_idx in range(num_chunks):
+            i = chunk_idx * chunk_size
+            chunk = train_text[i:i+chunk_size]
+            
+            print(f"  Chunk {chunk_idx+1}/{num_chunks}: {len(chunk):,} chars...", end=" ", flush=True)
+            start_time = time.time()
+            
+            try:
                 chunk_tokens = tok.encode(chunk)
                 train_tokens.extend(chunk_tokens)
-                pbar.update(1)
+                elapsed = time.time() - start_time
+                print(f"✓ {len(chunk_tokens):,} tokens ({elapsed:.1f}s)")
                 
-                # Explicitly free memory every 5 chunks
-                if (i // chunk_size) % 5 == 0:
+                # Free memory every 5 chunks
+                if chunk_idx % 5 == 0 and chunk_idx > 0:
                     import gc
                     gc.collect()
+                    
+            except Exception as e:
+                print(f"\n  ❌ Error encoding chunk {chunk_idx+1}: {e}")
+                print(f"  Chunk preview: '{chunk[:200]}...'")
+                raise
         
         train_data = np.array(train_tokens, dtype=np.int32)
         del train_tokens
