@@ -612,8 +612,8 @@ def main():
     # Hyperparameters - optimized based on environment
     if is_cloud:
         # A100 GPU optimization: 3-hour training, M4-compatible inference
-        # Target: ~50M params, better quality than 23M, still runs on M4
-        batch_size = 192  # A100 can handle very large batches (40GB VRAM)
+        # Target: ~30M params, better quality than 23M, still runs on M4
+        batch_size = 96  # Optimized for 512 context on A100 (40GB VRAM)
         block_size = 512  # Much longer context for better understanding
         n_layer = 8  # Deeper model for better learning
         n_head = 8  # Optimal for A100 parallelization (64 per head)
@@ -624,11 +624,12 @@ def main():
         lr = 3e-4  # Lower peak LR for stability with longer context
         warmup_iters = 1000  # Longer warmup for larger model + context
         min_lr = 3e-5  # 10% of peak for final fine-tuning
-        grad_accum_steps = 1  # No accumulation needed with large batch size
+        grad_accum_steps = 2  # Gradient accumulation for effective batch=192
         print("✓ Using A100-optimized hyperparameters (3-hour training target)")
-        print(f"  Model: 8 layers, 512 d_model, 512 context → ~50M params")
-        print(f"  Estimated training time: ~3 hours for 150 epochs")
-        print(f"  M4 inference: ~2GB RAM (easily handled by M4 Mac)")
+        print(f"  Model: 8 layers, 512 d_model, 512 context → ~30M params")
+        print(f"  Batch: 96 × 2 accum steps = effective 192")
+        print(f"  Estimated training time: ~3.5 hours for 150 epochs")
+        print(f"  M4 inference: <400MB RAM (easily handled by M4 Mac)")
     else:
         # M4 Mac optimization: Smaller model for MPS/CPU
         batch_size = 64  # Reasonable for M4
