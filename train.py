@@ -371,8 +371,30 @@ def main():
     is_cloud = 'COLAB_GPU' in os.environ or 'KAGGLE_KERNEL_RUN_TYPE' in os.environ or not platform.processor()
     if is_cloud:
         print("✓ Detected cloud environment (Colab/Kaggle)")
+        
+        # Optional: Mount Google Drive to persist models across sessions
+        # This prevents losing trained models when Colab disconnects
+        try:
+            from google.colab import drive
+            drive_mount_point = '/content/drive'
+            if not os.path.exists(drive_mount_point):
+                print("\n💾 Mounting Google Drive to save models persistently...")
+                drive.mount(drive_mount_point)
+                print("✓ Google Drive mounted at /content/drive")
+                
+                # Create backup directory in Google Drive
+                backup_dir = os.path.join(drive_mount_point, 'MyDrive', 'tiny_gpt_checkpoints')
+                os.makedirs(backup_dir, exist_ok=True)
+                print(f"✓ Checkpoint backup directory: {backup_dir}")
+            else:
+                backup_dir = os.path.join(drive_mount_point, 'MyDrive', 'tiny_gpt_checkpoints')
+                print(f"✓ Google Drive already mounted, backups: {backup_dir}")
+        except Exception as e:
+            print(f"⚠️  Google Drive mount skipped: {e}")
+            backup_dir = None
     else:
         print("✓ Detected local environment")
+        backup_dir = None
     
     # Check if we should use smaller dataset for faster training
     # Delete WT-103 files and script will use TinyShakespeare fallback
@@ -587,18 +609,39 @@ def main():
             except Exception as e:
                 print(f"⚠️  Failed to save cache: {e}")
 
-    # Hyperparameters (optimized for 6-hour overnight training on M4 with BPE)
-    batch_size = 64  # Reasonable batch size for M4
-    block_size = 128  # Good context window for BPE (each token is subword, not char)
-    n_layer = 5  # Increased depth for better learning
-    n_head = 6  # More attention heads for better pattern recognition
-    d_model = 360  # Larger embedding dimension (60 per head, clean multiple of n_head)
-    d_ff = 1440  # Larger feedforward dimension (4x d_model, standard ratio)
-    epochs = 80  # ~6 hours of training
-    iters_per_epoch = 400  # More gradient steps per epoch for better convergence
-    lr = 5e-4  # Peak learning rate
-    warmup_iters = 200  # Longer warmup for stability
-    min_lr = 5e-5  # Minimum learning rate for cosine decay (10% of peak)
+    # Hyperparameters - optimized based on environment
+    if is_cloud:
+        # A100 GPU optimization: Larger batches, bigger model, more epochs
+        batch_size = 128  # A100 can handle larger batches (40GB VRAM)
+        block_size = 256  # Longer context for better learning
+        n_layer = 6  # Deeper model
+        n_head = 8  # More attention heads (better parallelization on A100)
+        d_model = 512  # Larger embeddings (64 per head)
+        d_ff = 2048  # 4x d_model (standard transformer ratio)
+        epochs = 100  # More epochs for better convergence
+        iters_per_epoch = 500  # More steps per epoch
+        lr = 5e-4  # Peak learning rate
+        warmup_iters = 500  # Longer warmup for larger model
+        min_lr = 5e-5  # Minimum learning rate for cosine decay
+        grad_accum_steps = 1  # No accumulation needed with large batch size
+        print("✓ Using A100-optimized hyperparameters")
+        print(f"  Estimated params: ~100M, training time: ~2 hours for 100 epochs")
+    else:
+        # M4 Mac optimization: Smaller model for MPS/CPU
+        batch_size = 64  # Reasonable for M4
+        block_size = 128  # Good context window
+        n_layer = 5  # Moderate depth
+        n_head = 6  # Good attention coverage
+        d_model = 360  # 60 per head
+        d_ff = 1440  # 4x d_model
+        epochs = 80  # Reasonable overnight training
+        iters_per_epoch = 400  # Good convergence
+        lr = 5e-4  # Peak learning rate
+        warmup_iters = 200  # Standard warmup
+        min_lr = 5e-5  # 10% of peak
+        grad_accum_steps = 2  # Effective batch size = 128
+        print("✓ Using M4-optimized hyperparameters")
+        print(f"  Estimated params: ~32M, training time: ~6 hours for 80 epochs")
     
     # Ensure d_model is divisible by n_head
     if d_model % n_head != 0:
@@ -606,14 +649,20 @@ def main():
         d_model = ((d_model // n_head) + 1) * n_head
         print(f"⚠️  Adjusted d_model to {d_model} (must be divisible by n_head={n_head})")
 
-    model = TinyGPT(tok.vocab_size, block_size, n_layer, n_head, d_model, d_ff, dropout=0.15).to(DEVICE)
+    model = TinyGPT(tok.vocab_size, block_size, n_layer, n_head, d_model, d_ff, dropout=0.1).to(DEVICE)
     print(f"\nModel parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Training on: {DEVICE}\n")
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    # A100 optimization: use bfloat16 mixed precision for faster training
+    use_amp = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8  # A100 supports bfloat16
+    if use_amp:
+        print("✓ Using automatic mixed precision (AMP) with bfloat16 for faster training")
+        scaler = torch.cuda.amp.GradScaler()
+    else:
+        print("✓ Using full precision (float32)")
+        scaler = None
     
-    # Gradient accumulation for larger effective batch size
-    grad_accum_steps = 2  # Effective batch size = 64 * 2 = 128 (more reasonable)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     
     # Track best validation loss for checkpointing
     best_val_loss = float('inf')
@@ -640,18 +689,38 @@ def main():
             for param_group in optimizer.param_groups:
                 param_group['lr'] = current_lr
             
-            # Gradient accumulation
+            # Gradient accumulation with optional mixed precision
             optimizer.zero_grad()
             accum_loss = 0.0
             for micro_step in range(grad_accum_steps):
                 xb, yb = get_batch(train_data, batch_size, block_size, DEVICE)
-                logits, loss = model(xb, yb)
-                loss = loss / grad_accum_steps  # Scale loss
-                loss.backward()
-                accum_loss += loss.item()
+                
+                if use_amp:
+                    # Mixed precision forward pass
+                    with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                        logits, loss = model(xb, yb)
+                        loss = loss / grad_accum_steps
+                    
+                    # Scaled backward pass
+                    scaler.scale(loss).backward()
+                    accum_loss += loss.item()
+                else:
+                    # Standard float32 training
+                    logits, loss = model(xb, yb)
+                    loss = loss / grad_accum_steps
+                    loss.backward()
+                    accum_loss += loss.item()
             
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            # Gradient clipping and optimizer step
+            if use_amp:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+            
             global_step += 1
             
             # Evaluate and display progress every 100 iterations
@@ -700,6 +769,16 @@ def main():
                 import shutil
                 shutil.copy("tokenizer_bpe.json", "tokenizer_bpe_best.json")
                 print(f"✓ Saved tokenizer to tokenizer_bpe_best.json")
+            
+            # Backup to Google Drive if available
+            if backup_dir:
+                try:
+                    shutil.copy("tiny_gpt_best.pt", os.path.join(backup_dir, "tiny_gpt_best.pt"))
+                    if use_bpe:
+                        shutil.copy("tokenizer_bpe_best.json", os.path.join(backup_dir, "tokenizer_bpe_best.json"))
+                    print(f"✓ Backed up to Google Drive: {backup_dir}")
+                except Exception as e:
+                    print(f"⚠️  Google Drive backup failed: {e}")
 
     # Generate sample
     print("\n=== Generating sample ===")
