@@ -611,21 +611,24 @@ def main():
 
     # Hyperparameters - optimized based on environment
     if is_cloud:
-        # A100 GPU optimization: Larger batches, bigger model, more epochs
-        batch_size = 128  # A100 can handle larger batches (40GB VRAM)
-        block_size = 256  # Longer context for better learning
-        n_layer = 6  # Deeper model
-        n_head = 8  # More attention heads (better parallelization on A100)
+        # A100 GPU optimization: 3-hour training, M4-compatible inference
+        # Target: ~50M params, better quality than 23M, still runs on M4
+        batch_size = 192  # A100 can handle very large batches (40GB VRAM)
+        block_size = 512  # Much longer context for better understanding
+        n_layer = 8  # Deeper model for better learning
+        n_head = 8  # Optimal for A100 parallelization (64 per head)
         d_model = 512  # Larger embeddings (64 per head)
         d_ff = 2048  # 4x d_model (standard transformer ratio)
-        epochs = 100  # More epochs for better convergence
-        iters_per_epoch = 500  # More steps per epoch
-        lr = 5e-4  # Peak learning rate
-        warmup_iters = 500  # Longer warmup for larger model
-        min_lr = 5e-5  # Minimum learning rate for cosine decay
+        epochs = 150  # More epochs for convergence with longer context
+        iters_per_epoch = 400  # Balanced steps per epoch
+        lr = 3e-4  # Lower peak LR for stability with longer context
+        warmup_iters = 1000  # Longer warmup for larger model + context
+        min_lr = 3e-5  # 10% of peak for final fine-tuning
         grad_accum_steps = 1  # No accumulation needed with large batch size
-        print("✓ Using A100-optimized hyperparameters")
-        print(f"  Estimated params: ~100M, training time: ~2 hours for 100 epochs")
+        print("✓ Using A100-optimized hyperparameters (3-hour training target)")
+        print(f"  Model: 8 layers, 512 d_model, 512 context → ~50M params")
+        print(f"  Estimated training time: ~3 hours for 150 epochs")
+        print(f"  M4 inference: ~2GB RAM (easily handled by M4 Mac)")
     else:
         # M4 Mac optimization: Smaller model for MPS/CPU
         batch_size = 64  # Reasonable for M4
