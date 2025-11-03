@@ -361,6 +361,13 @@ def estimate_loss(model, train_data, val_data, batch_size, block_size, device, e
     return {k: np.mean(v) for k, v in losses.items()}
 
 def main():
+    # Clear GPU memory if CUDA is available (prevents OOM from previous runs)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+        print("✓ Cleared GPU memory cache")
+    
     # Download WT-103
     if not download_data():
         print("Could not download WT-103 dataset. Exiting.")
@@ -613,7 +620,7 @@ def main():
     if is_cloud:
         # A100 GPU optimization: 3-hour training, M4-compatible inference
         # Target: ~30M params, better quality than 23M, still runs on M4
-        batch_size = 192  # Large batch for A100 GPU utilization (40GB VRAM)
+        batch_size = 128  # Conservative batch for A100 (39.56 GiB available)
         block_size = 512  # Much longer context for better understanding
         n_layer = 8  # Deeper model for better learning
         n_head = 8  # Optimal for A100 parallelization (64 per head)
@@ -627,8 +634,8 @@ def main():
         grad_accum_steps = 1  # No accumulation needed with large batch
         print("✓ Using A100-optimized hyperparameters (3-hour training target)")
         print(f"  Model: 8 layers, 512 d_model, 512 context → ~30M params")
-        print(f"  Batch: 192 (full batch, no accumulation)")
-        print(f"  Estimated training time: ~45 minutes for 150 epochs")
+        print(f"  Batch: 128 (conservative for 39.56 GiB GPU)")
+        print(f"  Estimated training time: ~1 hour for 150 epochs")
         print(f"  M4 inference: <400MB RAM (easily handled by M4 Mac)")
     else:
         # M4 Mac optimization: Smaller model for MPS/CPU
